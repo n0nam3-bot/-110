@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>-110 | Sharp Sports Picks</title>
+  <meta name="description" content="-110: AI-powered sports picks, best bets, and player props. Free. Sharp. Daily.">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta property="og:title" content="-110 | Sharp Sports Picks">
+  <meta property="og:description" content="AI-powered best bets, props, and analysis. Free forever.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loading-overlay">
+  <div class="loading-logo">-110</div>
+  <div class="loading-bar"><div class="loading-bar-fill"></div></div>
+  <div class="loading-msg">Loading sharp picks…</div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<!-- ── NAV ── -->
+<nav id="nav">
+  <div class="container nav-inner">
+    <a class="logo" href="#">-110 <span>sharp picks</span></a>
+    <div class="nav-right" id="nav-user-area">
+      <!-- Populated by app.js -->
+    </div>
+  </div>
+</nav>
+
+<!-- ── SPORT TABS ── -->
+<div id="sport-nav">
+  <div class="sport-tabs">
+    <button class="sport-tab" data-sport="nba">🏀 NBA</button>
+    <button class="sport-tab" data-sport="nfl">🏈 NFL</button>
+    <button class="sport-tab" data-sport="mlb">⚾ MLB</button>
+    <button class="sport-tab" data-sport="nhl">🏒 NHL</button>
+    <button class="sport-tab" data-sport="ncaab">🏀 NCAAB</button>
+    <button class="sport-tab" data-sport="ncaaf">🏈 NCAAF</button>
+    <button class="sport-tab" data-sport="mls">⚽ MLS</button>
+  </div>
+</div>
+
+<!-- ── SUMMARY BAR ── -->
+<div id="summary-bar">
+  <div class="container summary-inner">
+    <div class="summary-stat">
+      <span class="val" id="stat-games">–</span>
+      <span class="lbl">Games Today</span>
+    </div>
+    <div class="summary-divider"></div>
+    <div class="summary-stat">
+      <span class="val" id="stat-bestbets">–</span>
+      <span class="lbl">Best Bets</span>
+    </div>
+    <div class="summary-divider"></div>
+    <div class="summary-stat">
+      <span class="val" id="stat-picks">–</span>
+      <span class="lbl">Total Picks</span>
+    </div>
+    <div class="summary-divider"></div>
+    <div class="summary-stat">
+      <span class="val" id="stat-sgrades">–</span>
+      <span class="lbl">S-Grade Picks</span>
+    </div>
+    <div id="today-date"></div>
+    <button class="nav-btn" id="btn-refresh" style="margin-left:auto" title="Refresh picks">↻ Refresh</button>
+  </div>
+</div>
+
+<!-- ── MAIN ── -->
+<div id="main">
+  <div id="feed">
+    <div class="section-header">
+      <span class="section-title">Today's Games</span>
+    </div>
+    <div id="games-list"><!-- populated by app.js --></div>
+  </div>
+
+  <aside id="sidebar">
+    <!-- Keys reminder (hidden after keys added) -->
+    <div id="keys-reminder">
+      <strong>🔑 Add Free API Keys</strong>
+      Get picks by adding free AI keys in Settings.<br>
+      Gemini (1M tokens/day free) · Groq (free) · OpenRouter (free).<br>
+      <a onclick="openModal('modal-settings')" href="#">Open Settings →</a>
+    </div>
+
+    <!-- Best bets -->
+    <div class="sidebar-card">
+      <div class="sidebar-card-header">🔥 Best Bets</div>
+      <div id="best-bets-list">
+        <div class="saved-empty">Analyzing games…</div>
+      </div>
+    </div>
+
+    <!-- Saved picks -->
+    <div class="sidebar-card">
+      <div class="sidebar-card-header">★ Saved Picks</div>
+      <div id="saved-list">
+        <div class="saved-empty">Sign in to save picks</div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     MODALS
+═══════════════════════════════════════════════ -->
+
+<!-- Auth modal -->
+<div class="modal-overlay" id="modal-auth">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Welcome to -110</span>
+      <button class="modal-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="auth-error" class="form-error" style="display:none"></div>
+
+      <!-- Login -->
+      <div id="auth-login-form">
+        <button class="form-btn form-btn-google" id="btn-google-login">
+          <svg width="16" height="16" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.2l6.8-6.8C35.9 2.5 30.3 0 24 0 14.7 0 6.7 5.4 2.9 13.3l7.9 6.1C12.6 13 17.9 9.5 24 9.5z"/><path fill="#34A853" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2l7.6 5.9c4.4-4.1 7-10.1 7-17.1z"/><path fill="#4A90D9" d="M10.8 28.6A14.7 14.7 0 0 1 9.5 24c0-1.6.3-3.2.7-4.6L2.3 13.3A23.9 23.9 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l8.2-6.2z"/><path fill="#FBBC05" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.8 2.2-8.3 2.2-6.1 0-11.4-4.1-13.2-9.9l-8.2 6.3C6.7 42.6 14.7 48 24 48z"/></svg>
+          Continue with Google
+        </button>
+        <div class="form-divider">or</div>
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <input class="form-input" type="email" id="login-email" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input class="form-input" type="password" id="login-password" placeholder="••••••••">
+        </div>
+        <button class="form-btn form-btn-primary" id="auth-login-btn">Sign In</button>
+        <div class="form-switch">No account? <a id="link-to-register">Create one free</a></div>
+      </div>
+
+      <!-- Register -->
+      <div id="auth-register-form" style="display:none">
+        <button class="form-btn form-btn-google" id="btn-google-register">
+          <svg width="16" height="16" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.2l6.8-6.8C35.9 2.5 30.3 0 24 0 14.7 0 6.7 5.4 2.9 13.3l7.9 6.1C12.6 13 17.9 9.5 24 9.5z"/><path fill="#34A853" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2l7.6 5.9c4.4-4.1 7-10.1 7-17.1z"/><path fill="#4A90D9" d="M10.8 28.6A14.7 14.7 0 0 1 9.5 24c0-1.6.3-3.2.7-4.6L2.3 13.3A23.9 23.9 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l8.2-6.2z"/><path fill="#FBBC05" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.8 2.2-8.3 2.2-6.1 0-11.4-4.1-13.2-9.9l-8.2 6.3C6.7 42.6 14.7 48 24 48z"/></svg>
+          Sign up with Google
+        </button>
+        <div class="form-divider">or</div>
+        <div class="form-group">
+          <label class="form-label">Display Name</label>
+          <input class="form-input" type="text" id="register-name" placeholder="Bettor Name">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <input class="form-input" type="email" id="register-email" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input class="form-input" type="password" id="register-password" placeholder="At least 8 characters">
+        </div>
+        <button class="form-btn form-btn-primary" id="auth-register-btn">Create Free Account</button>
+        <div class="form-switch">Have an account? <a id="link-to-login">Sign in</a></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings modal -->
+<div class="modal-overlay" id="modal-settings">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">⚙ Settings</span>
+      <button class="modal-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-tab="keys">API Keys</button>
+        <button class="settings-tab" data-tab="prefs">Preferences</button>
+        <button class="settings-tab" data-tab="about">About</button>
+      </div>
+
+      <!-- Keys tab -->
+      <div class="settings-section active" id="settings-keys">
+        <p style="font-size:.75rem;color:var(--text2);margin-bottom:16px;line-height:1.5">
+          All keys are stored securely in your account and never shared. Every key below has a generous free tier.
+        </p>
+
+        <div class="form-group">
+          <label class="form-label">🤖 Gemini API Key <span style="color:var(--accent);font-size:.65rem">(PRIMARY AI – FREE)</span></label>
+          <div class="key-field">
+            <input class="form-input" type="password" id="key-gemini" placeholder="AIza…">
+            <button class="key-toggle">👁</button>
+          </div>
+          <div class="key-hint">Free at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a> · 1M tokens/day</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">⚡ Groq API Key <span style="color:var(--accent2);font-size:.65rem">(FALLBACK – FREE)</span></label>
+          <div class="key-field">
+            <input class="form-input" type="password" id="key-groq" placeholder="gsk_…">
+            <button class="key-toggle">👁</button>
+          </div>
+          <div class="key-hint">Free at <a href="https://console.groq.com" target="_blank">console.groq.com</a> · 14,400 req/day</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">🌐 OpenRouter API Key <span style="color:var(--warn);font-size:.65rem">(FALLBACK – FREE)</span></label>
+          <div class="key-field">
+            <input class="form-input" type="password" id="key-openrouter" placeholder="sk-or-…">
+            <button class="key-toggle">👁</button>
+          </div>
+          <div class="key-hint">Free at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai</a> · Free model rotation</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">📊 The Odds-API Key <span style="color:var(--text2);font-size:.65rem">(LIVE LINES – 500 req/mo free)</span></label>
+          <div class="key-field">
+            <input class="form-input" type="password" id="key-oddsApi" placeholder="Your key…">
+            <button class="key-toggle">👁</button>
+          </div>
+          <div class="key-hint">Free at <a href="https://the-odds-api.com" target="_blank">the-odds-api.com</a> · 500 req/month free</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">🏀 Balldontlie Key <span style="color:var(--text2);font-size:.65rem">(NBA STATS – FREE)</span></label>
+          <div class="key-field">
+            <input class="form-input" type="password" id="key-balldontlie" placeholder="Your key…">
+            <button class="key-toggle">👁</button>
+          </div>
+          <div class="key-hint">Free at <a href="https://www.balldontlie.io" target="_blank">balldontlie.io</a> · Unlimited</div>
+        </div>
+      </div>
+
+      <!-- Prefs tab -->
+      <div class="settings-section" id="settings-prefs">
+        <div class="form-group">
+          <label class="form-label">Default Sport</label>
+          <select class="form-input" id="pref-sport">
+            <option value="nba">NBA</option>
+            <option value="nfl">NFL</option>
+            <option value="mlb">MLB</option>
+            <option value="nhl">NHL</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- About tab -->
+      <div class="settings-section" id="settings-about">
+        <p style="font-size:.8rem;color:var(--text2);line-height:1.7">
+          <strong style="color:var(--text)">-110</strong> is a free, open-source sports analytics tool.<br><br>
+          Data: ESPN · Sleeper · Balldontlie · The-Odds-API · TheSportsDB<br>
+          AI: Gemini 1.5 Flash · Groq Llama 3.3 · OpenRouter<br><br>
+          Picks are for informational purposes only. Bet responsibly.
+        </p>
+        <div style="margin-top:16px;font-size:.72rem;color:var(--text3)">v1.0.0 · github.com/n0nam3-bot/-110</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="nav-btn" onclick="closeAllModals()">Cancel</button>
+      <button class="nav-btn primary" id="btn-save-settings">Save Settings</button>
+    </div>
+  </div>
+</div>
+
+<!-- Profile modal -->
+<div class="modal-overlay" id="modal-profile">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">My Profile</span>
+      <button class="modal-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+        <div class="user-avatar" style="width:44px;height:44px;font-size:1rem" id="profile-avatar-wrap"></div>
+        <div>
+          <div style="font-weight:700;font-size:1rem" id="profile-name"></div>
+          <div style="font-size:.75rem;color:var(--text2)" id="profile-email"></div>
+        </div>
+      </div>
+
+      <div class="section-title" style="margin-bottom:10px">Pick Record</div>
+      <div class="profile-record">
+        <div class="record-stat">
+          <div class="record-val wins" id="profile-wins">0</div>
+          <div class="record-lbl">Wins</div>
+        </div>
+        <div class="record-stat">
+          <div class="record-val losses" id="profile-losses">0</div>
+          <div class="record-lbl">Losses</div>
+        </div>
+        <div class="record-stat">
+          <div class="record-val pushes" id="profile-pushes">0</div>
+          <div class="record-lbl">Pushes</div>
+        </div>
+      </div>
+
+      <div class="section-title" style="margin:16px 0 10px">Saved Picks</div>
+      <div id="profile-saved-list" style="max-height:200px;overflow-y:auto">
+        <div class="saved-empty">No saved picks yet</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="nav-btn" id="btn-logout">Sign Out</button>
+      <button class="nav-btn primary" onclick="closeAllModals()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Scripts ─── -->
+<script src="js/config.js"></script>
+<script type="module" src="js/app.js"></script>
+<script>
+  // Set today's date
+  document.getElementById("today-date").textContent =
+    new Date().toLocaleDateString("en-US", { weekday:"long", month:"long", day:"numeric", year:"numeric" });
+
+  // Global close helper used in settings modal cancel
+  function closeAllModals() {
+    document.querySelectorAll(".modal-overlay").forEach(m => m.classList.remove("open"));
+  }
+</script>
+</body>
+</html>
