@@ -129,6 +129,7 @@
     </div>
     <div class="modal-body">
       <div id="auth-error" class="form-error" style="display:none"></div>
+      <div id="auth-success" class="form-success" style="display:none"></div>
 
       <!-- Login -->
       <div id="auth-login-form">
@@ -246,10 +247,14 @@
         <div class="form-group">
           <label class="form-label">Default Sport</label>
           <select class="form-input" id="pref-sport">
-            <option value="nba">NBA</option>
-            <option value="nfl">NFL</option>
-            <option value="mlb">MLB</option>
-            <option value="nhl">NHL</option>
+            <option value="nba">🏀 NBA</option>
+            <option value="nfl">🏈 NFL</option>
+            <option value="mlb">⚾ MLB</option>
+            <option value="nhl">🏒 NHL</option>
+            <option value="mma">🥊 MMA/UFC</option>
+            <option value="ncaab">🏀 NCAAB</option>
+            <option value="ncaaf">🏈 NCAAF</option>
+            <option value="mls">⚽ MLS</option>
           </select>
         </div>
       </div>
@@ -309,8 +314,11 @@
         <div class="saved-empty">No saved picks yet</div>
       </div>
     </div>
-    <div class="modal-footer">
-      <button class="nav-btn" id="btn-logout">Sign Out</button>
+    <div class="modal-footer" style="justify-content:space-between">
+      <div style="display:flex;gap:8px">
+        <button class="nav-btn" id="btn-logout">Sign Out</button>
+        <button class="nav-btn" id="btn-profile-reset-password" title="Send password reset email">🔑 Reset Password</button>
+      </div>
       <button class="nav-btn primary" onclick="closeAllModals()">Close</button>
     </div>
   </div>
