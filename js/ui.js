@@ -1,10 +1,8 @@
-// ── UI helpers: toast, modals, render functions ──
-
+// ── UI helpers ──
 import { formatOdds } from "./picks.js";
 import { gradeColor } from "./ai.js";
 import { savePick, unsavePick, getCurrentUser } from "./firebase.js";
 
-// ─── Toast ───────────────────────────────────────────────────────────────────
 export function toast(msg, type = "success", duration = 3000) {
   const container = document.getElementById("toast-container");
   if (!container) return;
@@ -15,20 +13,10 @@ export function toast(msg, type = "success", duration = 3000) {
   setTimeout(() => { el.style.opacity = "0"; el.style.transition = "opacity .3s"; setTimeout(() => el.remove(), 300); }, duration);
 }
 
-// ─── Modal ───────────────────────────────────────────────────────────────────
-export function openModal(id) {
-  const el = document.getElementById(id);
-  if (el) el.classList.add("open");
-}
-export function closeModal(id) {
-  const el = document.getElementById(id);
-  if (el) el.classList.remove("open");
-}
-export function closeAllModals() {
-  document.querySelectorAll(".modal-overlay").forEach(m => m.classList.remove("open"));
-}
+export function openModal(id)    { const el = document.getElementById(id); if (el) el.classList.add("open"); }
+export function closeModal(id)   { const el = document.getElementById(id); if (el) el.classList.remove("open"); }
+export function closeAllModals() { document.querySelectorAll(".modal-overlay").forEach(m => m.classList.remove("open")); }
 
-// ─── Skeleton cards ──────────────────────────────────────────────────────────
 export function renderSkeletons(container, count = 4) {
   container.innerHTML = Array(count).fill(0).map(() => `
     <div class="skeleton-card">
@@ -36,19 +24,16 @@ export function renderSkeletons(container, count = 4) {
       <div class="skeleton skeleton-line-sm"></div>
       <div class="skeleton skeleton-line" style="width:90%"></div>
       <div class="skeleton skeleton-line-sm" style="width:50%"></div>
-    </div>
-  `).join("");
+    </div>`).join("");
 }
 
-// ─── Grade badge ─────────────────────────────────────────────────────────────
 export function gradeBadge(grade) {
   return `<span class="badge grade-${grade?.toLowerCase()}">${grade || "?"}</span>`;
 }
 
-// ─── Format time ─────────────────────────────────────────────────────────────
 export function formatGameTime(dateStr) {
   if (!dateStr) return "";
-  const d = new Date(dateStr);
+  const d   = new Date(dateStr);
   const now = new Date();
   const isToday = d.toDateString() === now.toDateString();
   if (isToday) return d.toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit", hour12:true });
@@ -56,16 +41,14 @@ export function formatGameTime(dateStr) {
          d.toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit", hour12:true });
 }
 
-// ─── Team logo ────────────────────────────────────────────────────────────────
 export function teamLogoHtml(team) {
   if (team?.logo) return `<img class="team-logo" src="${team.logo}" alt="${team.abbr}" onerror="this.outerHTML='<div class=team-logo-placeholder>${team.abbr||"?"}</div>'">`;
   return `<div class="team-logo-placeholder">${team?.abbr || "?"}</div>`;
 }
 
-// ─── Odds strip ───────────────────────────────────────────────────────────────
 function oddsStripHtml(game) {
   const o = game.odds;
-  if (!o) return `<div class="odds-strip"><div class="odds-cell" style="width:100%;text-align:center"><span class="odds-label">Odds unavailable — add Odds-API key in Settings</span></div></div>`;
+  if (!o) return `<div class="odds-strip"><div class="odds-cell" style="width:100%;text-align:center"><span class="odds-label">Add Odds-API key in Settings for live lines</span></div></div>`;
   return `
     <div class="odds-strip">
       <div class="odds-cell">
@@ -86,17 +69,18 @@ function oddsStripHtml(game) {
         <div class="odds-label">${game.awayTeam.abbr} ML</div>
         <div class="odds-val">${formatOdds(o.moneyline?.away?.price)}</div>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
-// ─── Pick row ─────────────────────────────────────────────────────────────────
-export function pickRowHtml(pick, savedIds = []) {
-  const gc   = gradeColor(pick.grade);
+export function pickRowHtml(pick, savedIds = [], isBestBet = false) {
+  const gc      = gradeColor(pick.grade);
   const isSaved = savedIds.includes(pick.id);
-  const typeLabel = pick.type === "prop" ? (pick.marketLabel || "Prop") : pick.type?.replace("_"," ").toUpperCase();
+  const typeLabel = pick.type === "prop"
+    ? (pick.marketLabel || "Prop")
+    : (pick.type?.replace(/_/g," ") || "Pick").toUpperCase();
+
   return `
-    <div class="pick-row" data-pick-id="${pick.id}">
+    <div class="pick-row ${isBestBet ? "pick-row-best" : ""}" data-pick-id="${pick.id}">
       <div class="pick-grade" style="background:${gc};color:#0a0a0a">${pick.grade}</div>
       <div class="pick-body">
         <div class="pick-selection">${pick.selection}</div>
@@ -110,16 +94,19 @@ export function pickRowHtml(pick, savedIds = []) {
       <button class="save-btn ${isSaved ? "saved" : ""}" data-pick-id="${pick.id}" title="${isSaved ? "Unsave" : "Save pick"}">
         ${isSaved ? "★" : "☆"}
       </button>
-    </div>
-  `;
+    </div>`;
 }
 
-// ─── Game card ────────────────────────────────────────────────────────────────
 export function renderGameCard(game, pickResult, savedIds = []) {
   const hasBestBet = !!pickResult?.bestBet;
-  const picks      = pickResult?.allPicks || [];
+  const allPicks   = pickResult?.allPicks || [];
   const analyzing  = !pickResult;
   const hasError   = pickResult?.error;
+  const bestBetId  = pickResult?.bestBet?.id;
+
+  // Sort picks: S first, then A, then B, then C
+  const gradeOrder = { S:0, A:1, B:2, C:3 };
+  const sortedPicks = [...allPicks].sort((a,b) => (gradeOrder[a.grade]??9) - (gradeOrder[b.grade]??9));
 
   return `
     <div class="game-card ${hasBestBet ? "has-best-bet" : ""}" id="card-${game.id}">
@@ -141,8 +128,7 @@ export function renderGameCard(game, pickResult, savedIds = []) {
         <div class="game-meta">
           ${game.live
             ? `<span class="game-status-live">LIVE</span>`
-            : `<span class="game-time">${formatGameTime(game.date)}</span>`
-          }
+            : `<span class="game-time">${formatGameTime(game.date)}</span>`}
           ${game.broadcast ? `<span style="font-size:.62rem;color:var(--text3)">${game.broadcast}</span>` : ""}
         </div>
       </div>
@@ -151,30 +137,29 @@ export function renderGameCard(game, pickResult, savedIds = []) {
 
       <div class="pick-section" id="picks-${game.id}">
         ${analyzing ? `
-          <div class="analyzing-row">
-            <div class="spinner"></div>
-            <span>Analyzing matchup…</span>
-          </div>
+          <div class="analyzing-row"><div class="spinner"></div><span>Analyzing matchup…</span></div>
         ` : hasError ? `
           <div class="no-value-row">⚠ Analysis unavailable — check API keys in Settings</div>
-        ` : hasBestBet ? `
-          <div class="best-bet-banner">
-            <span class="best-bet-label">🔥 Best Bet</span>
-            <div class="best-bet-content">
-              <div class="best-bet-selection">${pickResult.bestBet.selection}</div>
-              <div class="best-bet-meta">
-                <span class="best-bet-odds">${formatOdds(pickResult.bestBet.odds)}</span>
-                ${gradeBadge(pickResult.bestBet.grade)}
-                <span class="badge badge-conf">${pickResult.bestBet.confidence?.toFixed(1)} conf</span>
+        ` : sortedPicks.length > 0 ? `
+          ${hasBestBet ? `
+            <div class="best-bet-banner">
+              <span class="best-bet-label">🔥 Best Bet</span>
+              <div class="best-bet-content">
+                <div class="best-bet-selection">${pickResult.bestBet.selection}</div>
+                <div class="best-bet-meta">
+                  <span class="best-bet-odds">${formatOdds(pickResult.bestBet.odds)}</span>
+                  ${gradeBadge(pickResult.bestBet.grade)}
+                  <span class="badge badge-conf">${pickResult.bestBet.confidence?.toFixed(1)} conf · ${pickResult.bestBet.edge?.toFixed(1)}% edge</span>
+                </div>
+                <div class="best-bet-reasoning">${pickResult.bestBet.reasoning || ""}</div>
               </div>
-              <div class="best-bet-reasoning">${pickResult.bestBet.reasoning || ""}</div>
-            </div>
+            </div>` : ""}
+          <div class="all-picks-header">
+            <span>All Picks (${sortedPicks.length})</span>
           </div>
-          ${picks.length > 1 ? `
-            <div class="picks-list">
-              ${picks.filter(p => p.id !== pickResult.bestBet.id).map(p => pickRowHtml(p, savedIds)).join("")}
-            </div>
-          ` : ""}
+          <div class="picks-list">
+            ${sortedPicks.map(p => pickRowHtml(p, savedIds, p.id === bestBetId)).join("")}
+          </div>
         ` : `
           <div class="no-value-row">No qualifying picks found for this game — no edge detected.</div>
         `}
@@ -186,13 +171,10 @@ export function renderGameCard(game, pickResult, savedIds = []) {
         </button>
         <div class="game-summary-text" id="summary-${game.id}" style="display:none">
           ${pickResult.gameAnalysis.summary}
-        </div>
-      ` : ""}
-    </div>
-  `;
+        </div>` : ""}
+    </div>`;
 }
 
-// ─── Save button handler ─────────────────────────────────────────────────────
 export function attachSaveHandlers(allPickData, savedIds, onSaveChange) {
   document.querySelectorAll(".save-btn").forEach(btn => {
     btn.addEventListener("click", async (e) => {
@@ -201,7 +183,6 @@ export function attachSaveHandlers(allPickData, savedIds, onSaveChange) {
       const user   = getCurrentUser();
       if (!user) { toast("Sign in to save picks", "error"); return; }
 
-      // Find the pick
       let foundPick = null;
       for (const pd of allPickData) {
         const match = (pd.allPicks || []).find(p => p.id === pickId);
@@ -227,7 +208,6 @@ export function attachSaveHandlers(allPickData, savedIds, onSaveChange) {
   });
 }
 
-// ─── Card toggle handlers ─────────────────────────────────────────────────────
 export function attachToggleHandlers() {
   document.querySelectorAll(".card-toggle").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -241,15 +221,11 @@ export function attachToggleHandlers() {
   });
 }
 
-// ─── Best bets sidebar ────────────────────────────────────────────────────────
 export function renderBestBetsSidebar(allPickData) {
   const list = document.getElementById("best-bets-list");
   if (!list) return;
   const bets = allPickData.filter(pd => pd.bestBet);
-  if (!bets.length) {
-    list.innerHTML = `<div class="saved-empty">Best bets load as games are analyzed</div>`;
-    return;
-  }
+  if (!bets.length) { list.innerHTML = `<div class="saved-empty">Best bets load as games are analyzed</div>`; return; }
   list.innerHTML = bets.map(pd => `
     <div class="bb-item" onclick="document.getElementById('card-${pd.gameId}')?.scrollIntoView({behavior:'smooth',block:'center'})">
       <div class="bb-game">${pd.game?.shortName || pd.gameId}</div>
@@ -259,32 +235,21 @@ export function renderBestBetsSidebar(allPickData) {
         ${gradeBadge(pd.bestBet.grade)}
         <span class="badge badge-conf">${pd.bestBet.confidence?.toFixed(1)}</span>
       </div>
-    </div>
-  `).join("");
+    </div>`).join("");
 }
 
-// ─── Summary stats bar ────────────────────────────────────────────────────────
 export function renderSummaryBar(games, allPickData) {
-  const totalGames   = games.length;
-  const bestBets     = allPickData.filter(pd => pd.bestBet).length;
-  const totalPicks   = allPickData.reduce((a, pd) => a + (pd.allPicks?.length || 0), 0);
-  const sGrades      = allPickData.reduce((a, pd) => a + (pd.allPicks || []).filter(p => p.grade === "S").length, 0);
-
   const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-  setVal("stat-games",     totalGames);
-  setVal("stat-bestbets",  bestBets);
-  setVal("stat-picks",     totalPicks);
-  setVal("stat-sgrades",   sGrades);
+  setVal("stat-games",    games.length);
+  setVal("stat-bestbets", allPickData.filter(pd => pd.bestBet).length);
+  setVal("stat-picks",    allPickData.reduce((a, pd) => a + (pd.allPicks?.length || 0), 0));
+  setVal("stat-sgrades",  allPickData.reduce((a, pd) => a + (pd.allPicks || []).filter(p => p.grade === "S").length, 0));
 }
 
-// ─── Saved picks sidebar ──────────────────────────────────────────────────────
 export function renderSavedSidebar(savedPicks) {
   const list = document.getElementById("saved-list");
   if (!list) return;
-  if (!savedPicks?.length) {
-    list.innerHTML = `<div class="saved-empty">No saved picks yet — star a pick to save it</div>`;
-    return;
-  }
+  if (!savedPicks?.length) { list.innerHTML = `<div class="saved-empty">No saved picks yet — star a pick to save it</div>`; return; }
   list.innerHTML = savedPicks.map(p => `
     <div class="bb-item">
       <div class="bb-game">${p.gameLabel || "Game"}</div>
@@ -293,6 +258,5 @@ export function renderSavedSidebar(savedPicks) {
         <span class="bb-odds">${formatOdds(p.odds)}</span>
         ${gradeBadge(p.grade)}
       </div>
-    </div>
-  `).join("");
+    </div>`).join("");
 }

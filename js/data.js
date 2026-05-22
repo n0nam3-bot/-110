@@ -16,7 +16,11 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ─── ESPN ────────────────────────────────────────────────────────────────────
-// date: "YYYYMMDD" string or null for today
+// MMA/UFC on ESPN uses a different scoreboard path — no league segment
+// Standard:  /sports/{sport}/{league}/scoreboard
+// MMA:       /sports/mma/scoreboard  (league = "ufc" is NOT a valid path segment)
+// We also try the leagueSchedule endpoint as fallback for future UFC events
+
 export async function getESPNGames(sportKey, date = null) {
   const s  = CONFIG.sports[sportKey];
   if (!s) return [];
@@ -24,8 +28,26 @@ export async function getESPNGames(sportKey, date = null) {
   const cached = memGet(ck);
   if (cached) return cached;
 
-  const url  = CONFIG.espn.scoreboard(s.espnSport, s.espnLeague, date);
-  const data = await fetchJSON(url);
+  let data = null;
+
+  if (sportKey === "mma") {
+    // ESPN MMA scoreboard — no league in path, date filter applied differently
+    const base = `https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard`;
+    const url  = date ? `${base}?dates=${date}` : base;
+    data = await fetchJSON(url);
+
+    // If no events on scoreboard, try the schedule endpoint for upcoming cards
+    if (!data?.events?.length) {
+      const sched = await fetchJSON(
+        `https://site.api.espn.com/apis/site/v2/sports/mma/ufc/schedule${date ? `?dates=${date}` : ""}`
+      );
+      if (sched?.events?.length) data = sched;
+    }
+  } else {
+    const url = CONFIG.espn.scoreboard(s.espnSport, s.espnLeague, date);
+    data = await fetchJSON(url);
+  }
+
   if (!data?.events) return [];
 
   const games = data.events.map(ev => {
@@ -34,6 +56,13 @@ export async function getESPNGames(sportKey, date = null) {
     const away   = comp?.competitors?.find(c => c.homeAway === "away");
     const status = ev.status?.type;
     const state  = status?.state; // "pre" | "in" | "post"
+
+    // MMA: fighters listed as competitors without homeAway distinction — treat first as "away" (challenger)
+    const fighterA = comp?.competitors?.[0];
+    const fighterB = comp?.competitors?.[1];
+
+    const isMMA = sportKey === "mma";
+
     return {
       id:        ev.id,
       sport:     sportKey,
@@ -44,22 +73,39 @@ export async function getESPNGames(sportKey, date = null) {
       completed: status?.completed || false,
       live:      state === "in",
       pre:       state === "pre",
-      homeTeam:  { id: home?.id, name: home?.team?.displayName, abbr: home?.team?.abbreviation, logo: home?.team?.logo, score: home?.score, record: home?.records?.[0]?.summary },
-      awayTeam:  { id: away?.id, name: away?.team?.displayName, abbr: away?.team?.abbreviation, logo: away?.team?.logo, score: away?.score, record: away?.records?.[0]?.summary },
+      homeTeam: isMMA ? {
+        id:   fighterB?.id,
+        name: fighterB?.athlete?.displayName || fighterB?.team?.displayName || "Fighter B",
+        abbr: fighterB?.athlete?.lastName    || "B",
+        logo: fighterB?.athlete?.headshot?.href || fighterB?.team?.logo,
+        record: fighterB?.records?.[0]?.summary
+      } : {
+        id: home?.id, name: home?.team?.displayName, abbr: home?.team?.abbreviation,
+        logo: home?.team?.logo, score: home?.score, record: home?.records?.[0]?.summary
+      },
+      awayTeam: isMMA ? {
+        id:   fighterA?.id,
+        name: fighterA?.athlete?.displayName || fighterA?.team?.displayName || "Fighter A",
+        abbr: fighterA?.athlete?.lastName    || "A",
+        logo: fighterA?.athlete?.headshot?.href || fighterA?.team?.logo,
+        record: fighterA?.records?.[0]?.summary
+      } : {
+        id: away?.id, name: away?.team?.displayName, abbr: away?.team?.abbreviation,
+        logo: away?.team?.logo, score: away?.score, record: away?.records?.[0]?.summary
+      },
       venue:     comp?.venue?.fullName,
       broadcast: comp?.broadcasts?.[0]?.names?.join(", "),
     };
   });
 
-  // ── Only pre-game events: live games skew odds against bettors ──
+  // Pre-game only — live games skew odds against bettors
   const pregame = games.filter(g => !g.completed && !g.live);
-
   memSet(ck, pregame, CONFIG.cache.espn);
   return pregame;
 }
 
 export async function getTeamStats(sportKey, teamId) {
-  if (!teamId) return [];
+  if (!teamId || sportKey === "mma") return [];
   const s  = CONFIG.sports[sportKey];
   const ck = `teamstats_${sportKey}_${teamId}`;
   const cached = memGet(ck);
@@ -71,7 +117,7 @@ export async function getTeamStats(sportKey, teamId) {
 }
 
 export async function getTeamSchedule(sportKey, teamId) {
-  if (!teamId) return [];
+  if (!teamId || sportKey === "mma") return [];
   const s  = CONFIG.sports[sportKey];
   const ck = `schedule_${sportKey}_${teamId}`;
   const cached = memGet(ck);
@@ -89,7 +135,7 @@ export async function getTeamSchedule(sportKey, teamId) {
   return result;
 }
 
-// ─── Sleeper (NFL injuries only) ─────────────────────────────────────────────
+// ─── Sleeper ──────────────────────────────────────────────────────────────────
 let _sleeperPlayers = null;
 export async function getSleeperInjuries() {
   const ck = "sleeper_injuries";
@@ -107,7 +153,7 @@ export async function getSleeperInjuries() {
   return injured;
 }
 
-// ─── Balldontlie (NBA only, optional key) ────────────────────────────────────
+// ─── Balldontlie ──────────────────────────────────────────────────────────────
 export async function getNBAPlayerStats(playerName, apiKey) {
   const ck = `bdl_${playerName}`;
   const cached = memGet(ck);
@@ -136,7 +182,7 @@ export async function getNBAPlayerStats(playerName, apiKey) {
 
 // ─── Odds-API ────────────────────────────────────────────────────────────────
 export async function getOdds(sportKey, apiKey) {
-  if (!apiKey) return [];      // Skip entirely if no key — saves all requests
+  if (!apiKey) return [];
   const ck = `odds_${sportKey}`;
   const cached = memGet(ck);
   if (cached) return cached;
@@ -145,7 +191,6 @@ export async function getOdds(sportKey, apiKey) {
   const data = await fetchJSON(url);
   if (!data || !Array.isArray(data)) return [];
   const result = data
-    // Only return pre-game odds (commence_time in future)
     .filter(g => new Date(g.commence_time) > new Date())
     .map(game => ({
       id: game.id, homeTeam: game.home_team, awayTeam: game.away_team,
@@ -179,7 +224,7 @@ export async function getPlayerProps(sportKey, eventId, apiKey) {
   return props;
 }
 
-// ─── Merge odds into games ───────────────────────────────────────────────────
+// ─── Merge odds into games ────────────────────────────────────────────────────
 export function mergeOddsIntoGames(games, oddsData) {
   return games.map(g => {
     const homeName = (g.homeTeam.name || "").toLowerCase();
@@ -189,7 +234,10 @@ export function mergeOddsIntoGames(games, oddsData) {
       const oa = o.awayTeam.toLowerCase();
       return oh.includes(g.homeTeam.abbr?.toLowerCase() || "___") ||
              oh.includes(homeName.split(" ").pop() || "___") ||
-             oa.includes(awayName.split(" ").pop() || "___");
+             oa.includes(awayName.split(" ").pop() || "___") ||
+             // MMA: match fighter last names
+             oh.includes(homeName.split(" ").slice(-1)[0] || "___") ||
+             oa.includes(awayName.split(" ").slice(-1)[0] || "___");
     });
     if (!match) return g;
     const allMarkets = match.bookmakers.flatMap(b => b.markets);
