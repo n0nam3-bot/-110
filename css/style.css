@@ -830,3 +830,21 @@ button { cursor: pointer; font-family: inherit; border: none; }
   #toast-container { bottom: 16px; right: 16px; left: 16px; }
   .toast { max-width: 100%; }
 }
+
+/* ─── Date selector ──────────────────────────────────────────────────────────── */
+#date-selector {
+  color-scheme: dark;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+}
+#date-selector:focus { outline: none; border-color: var(--accent); }
+#date-selector::-webkit-calendar-picker-indicator { filter: invert(0.7); cursor: pointer; }
+
+@media (max-width: 700px) {
+  #date-selector { width: 120px !important; }
+  #btn-today { display: none; }
+  .summary-stat:nth-child(n+5) { display: none; }
+}
