@@ -1,11 +1,12 @@
 const CONFIG = {
   firebase: {
-    apiKey:            "FIREBASE_API_KEY",
-    authDomain:        "FIREBASE_AUTH_DOMAIN",
-    projectId:         "FIREBASE_PROJECT_ID",
-    storageBucket:     "FIREBASE_STORAGE_BUCKET",
-    messagingSenderId: "FIREBASE_MESSAGING_SENDER_ID",
-    appId:             "FIREBASE_APP_ID"
+    apiKey: "AIzaSyA8oe82ST31XfyEJ3dqmNF5FthK_FEyT-8",
+    authDomain: "project-4868291462124176670.firebaseapp.com",
+    projectId: "project-4868291462124176670",
+    storageBucket: "project-4868291462124176670.firebasestorage.app",
+    messagingSenderId: "828639177624",
+    appId: "1:828639177624:web:cff22a16ad5ea85608d9ed",
+    measurementId: "G-LY4FSHLL3W"
   },
   app: {
     name: "-110", tagline: "Sharp picks. No noise.",
