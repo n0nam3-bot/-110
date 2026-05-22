@@ -1,8 +1,8 @@
-// ── Main app controller ──
 import { initFirebase, onUserChange, ensureUserDoc, getCurrentUser,
          loginGoogle, loginEmail, registerEmail, logout,
-         getUserDoc, updateUserDoc, saveUserKeys, getUserKeys } from "./firebase.js";
-import { loadGamesForSport, getAllPicksForSport } from "./picks.js";
+         getUserDoc, saveUserKeys, getUserKeys, syncUserKeysToLocalStorage,
+         savePick, unsavePick } from "./firebase.js";
+import { loadGamesForSport, getPicksForGame } from "./picks.js";
 import { hasKeys } from "./ai.js";
 import { renderGameCard, renderBestBetsSidebar, renderSavedSidebar,
          renderSummaryBar, attachSaveHandlers, attachToggleHandlers,
@@ -10,13 +10,11 @@ import { renderGameCard, renderBestBetsSidebar, renderSavedSidebar,
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let state = {
-  user:          null,
-  userDoc:       null,
-  activeSport:   localStorage.getItem(KEYS.sport) || "nba",
-  games:         [],
-  pickData:      [],
-  savedIds:      [],
-  loading:       false
+  user: null, userDoc: null,
+  activeSport:  localStorage.getItem(KEYS.sport) || "nba",
+  activeDate:   null,   // null = today, "YYYYMMDD" = selected date
+  games: [], pickData: [], savedIds: [],
+  loading: false
 };
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -27,22 +25,26 @@ async function init() {
     state.user = user;
     if (user) {
       await ensureUserDoc(user);
-      state.userDoc = await getUserDoc(user.uid);
+      // ── KEY FIX: sync Firebase keys → localStorage on every login/device ──
+      await syncUserKeysToLocalStorage(user.uid);
+      state.userDoc  = await getUserDoc(user.uid);
       state.savedIds = (state.userDoc?.savedPicks || []).map(p => p.id);
       renderUserUI(user);
       renderSavedSidebar(state.userDoc?.savedPicks || []);
+      // Reload picks now that keys are available
+      await loadSport(state.activeSport, state.activeDate);
     } else {
       renderGuestUI();
     }
   });
 
   setupSportTabs();
+  setupDateSelector();
   setupModals();
-  await loadSport(state.activeSport);
+  await loadSport(state.activeSport, state.activeDate);
   hideLoadingOverlay();
 }
 
-// ─── Loading overlay ──────────────────────────────────────────────────────────
 function hideLoadingOverlay() {
   const el = document.getElementById("loading-overlay");
   if (el) { el.classList.add("hidden"); setTimeout(() => el.remove(), 400); }
@@ -53,119 +55,130 @@ function setupSportTabs() {
   document.querySelectorAll(".sport-tab").forEach(tab => {
     tab.addEventListener("click", () => {
       const sport = tab.dataset.sport;
-      if (sport === state.activeSport || state.loading) return;
+      if (sport === state.activeSport && !state.activeDate || state.loading) return;
       document.querySelectorAll(".sport-tab").forEach(t => t.classList.remove("active"));
       tab.classList.add("active");
       state.activeSport = sport;
       localStorage.setItem(KEYS.sport, sport);
-      loadSport(sport);
+      loadSport(sport, state.activeDate);
     });
   });
-  // Set initial active tab
   document.querySelector(`[data-sport="${state.activeSport}"]`)?.classList.add("active");
 }
 
+// ─── Date selector ────────────────────────────────────────────────────────────
+function setupDateSelector() {
+  const input = document.getElementById("date-selector");
+  if (!input) return;
+
+  // Set default value to today
+  const today = new Date();
+  input.value = today.toISOString().split("T")[0];  // "YYYY-MM-DD"
+
+  input.addEventListener("change", () => {
+    const val = input.value; // "YYYY-MM-DD"
+    if (!val) {
+      state.activeDate = null;
+    } else {
+      // ESPN wants "YYYYMMDD"
+      state.activeDate = val.replace(/-/g, "");
+    }
+    loadSport(state.activeSport, state.activeDate);
+  });
+
+  document.getElementById("btn-today")?.addEventListener("click", () => {
+    const today = new Date();
+    input.value = today.toISOString().split("T")[0];
+    state.activeDate = null;
+    loadSport(state.activeSport, null);
+  });
+}
+
 // ─── Load sport ───────────────────────────────────────────────────────────────
-async function loadSport(sportKey) {
-  state.loading = true;
+async function loadSport(sportKey, date = null) {
+  state.loading  = true;
   state.pickData = [];
   const container = document.getElementById("games-list");
   renderSkeletons(container, 5);
-  document.getElementById("stat-games").textContent     = "–";
-  document.getElementById("stat-bestbets").textContent  = "–";
-  document.getElementById("stat-picks").textContent     = "–";
-  document.getElementById("stat-sgrades").textContent   = "–";
+  ["stat-games","stat-bestbets","stat-picks","stat-sgrades"].forEach(id => {
+    const el = document.getElementById(id); if (el) el.textContent = "–";
+  });
 
-  // Check for keys
   if (!hasKeys()) {
     container.innerHTML = `
       <div class="empty-state">
         <div class="icon">🔑</div>
         <div class="title">API Keys Required</div>
         <div class="desc">Add at least one free AI key (Gemini, Groq, or OpenRouter) in <a href="#" onclick="openModal('modal-settings')">Settings</a> to generate picks.</div>
-      </div>
-    `;
+      </div>`;
     state.loading = false;
     return;
   }
 
   try {
-    state.games = await loadGamesForSport(sportKey);
-    const upcoming = state.games.filter(g => !g.completed).slice(0, 12);
+    state.games = await loadGamesForSport(sportKey, date);
+    const upcoming = state.games.slice(0, 12);
 
     if (!upcoming.length) {
+      const dateLabel = date
+        ? new Date(date.replace(/(\d{4})(\d{2})(\d{2})/,"$1-$2-$3")).toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})
+        : "today";
       container.innerHTML = `
         <div class="empty-state">
           <div class="icon">${CONFIG.sports[sportKey]?.emoji || "🏟"}</div>
-          <div class="title">No games today</div>
-          <div class="desc">Check back when the ${CONFIG.sports[sportKey]?.label} schedule is active.</div>
-        </div>
-      `;
+          <div class="title">No pre-game events</div>
+          <div class="desc">No upcoming ${CONFIG.sports[sportKey]?.label} games found for ${dateLabel}.<br>Live and completed games are excluded — try another date.</div>
+        </div>`;
       state.loading = false;
       return;
     }
 
-    // Render cards with "analyzing" state
     container.innerHTML = upcoming.map(g => renderGameCard(g, null, state.savedIds)).join("");
     attachToggleHandlers();
 
-    // Analyze games one-by-one
     for (let i = 0; i < upcoming.length; i++) {
       const game = upcoming[i];
       try {
-        const { getPicksForGame } = await import("./picks.js");
         const pickResult = await getPicksForGame(game);
         state.pickData.push(pickResult);
-
-        // Update just this card
         const card = document.getElementById(`card-${game.id}`);
-        if (card) {
-          card.outerHTML = renderGameCard(game, pickResult, state.savedIds);
-        }
+        if (card) card.outerHTML = renderGameCard(game, pickResult, state.savedIds);
         attachToggleHandlers();
-        attachSaveHandlers(state.pickData, state.savedIds, () => {
-          renderSavedSidebar(state.userDoc?.savedPicks || []);
-        });
-
+        attachSaveHandlers(state.pickData, state.savedIds, onSaveChange);
         renderBestBetsSidebar(state.pickData);
         renderSummaryBar(upcoming, state.pickData);
       } catch (e) {
-        console.warn(`Game ${game.id} failed:`, e.message);
+        console.warn(`Game ${game.id}:`, e.message);
         const card = document.getElementById(`card-${game.id}`);
-        if (card) {
-          card.outerHTML = renderGameCard(game, { error: e.message, allPicks: [], bestBet: null }, state.savedIds);
-        }
+        if (card) card.outerHTML = renderGameCard(game, { error: e.message, allPicks:[], bestBet:null }, state.savedIds);
       }
     }
   } catch (e) {
-    container.innerHTML = `
-      <div class="empty-state">
-        <div class="icon">⚠</div>
-        <div class="title">Failed to load games</div>
-        <div class="desc">${e.message}</div>
-      </div>
-    `;
+    container.innerHTML = `<div class="empty-state"><div class="icon">⚠</div><div class="title">Failed to load</div><div class="desc">${e.message}</div></div>`;
   }
-
   state.loading = false;
+}
+
+async function onSaveChange() {
+  if (state.user) {
+    state.userDoc = await getUserDoc(state.user.uid);
+    renderSavedSidebar(state.userDoc?.savedPicks || []);
+  }
 }
 
 // ─── User UI ──────────────────────────────────────────────────────────────────
 function renderUserUI(user) {
   const right = document.getElementById("nav-user-area");
   if (!right) return;
-  const initials = (user.displayName || user.email || "U").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  const initials = (user.displayName || user.email || "U").split(" ").map(w => w[0]).join("").slice(0,2).toUpperCase();
   right.innerHTML = `
     <button class="nav-btn" id="btn-settings">⚙ Settings</button>
     <div class="user-pill" id="btn-profile">
-      <div class="user-avatar">
-        ${user.photoURL ? `<img src="${user.photoURL}" alt="">` : initials}
-      </div>
+      <div class="user-avatar">${user.photoURL ? `<img src="${user.photoURL}" alt="">` : initials}</div>
       <span>${user.displayName?.split(" ")[0] || "Profile"}</span>
-    </div>
-  `;
-  document.getElementById("btn-settings")?.addEventListener("click", () => openModal("modal-settings"));
-  document.getElementById("btn-profile")?.addEventListener("click",  () => openProfileModal());
+    </div>`;
+  document.getElementById("btn-settings")?.addEventListener("click", openSettingsModal);
+  document.getElementById("btn-profile")?.addEventListener("click",  openProfileModal);
 }
 
 function renderGuestUI() {
@@ -174,64 +187,57 @@ function renderGuestUI() {
   right.innerHTML = `
     <button class="nav-btn" id="btn-settings">⚙ Settings</button>
     <button class="nav-btn" id="btn-login">Sign In</button>
-    <button class="nav-btn primary" id="btn-signup">Get Started</button>
-  `;
-  document.getElementById("btn-settings")?.addEventListener("click", () => openModal("modal-settings"));
+    <button class="nav-btn primary" id="btn-signup">Get Started</button>`;
+  document.getElementById("btn-settings")?.addEventListener("click", openSettingsModal);
   document.getElementById("btn-login")?.addEventListener("click",  () => { openModal("modal-auth"); showAuthTab("login"); });
   document.getElementById("btn-signup")?.addEventListener("click", () => { openModal("modal-auth"); showAuthTab("register"); });
 }
 
-// ─── Auth modal ───────────────────────────────────────────────────────────────
+// ─── Auth ─────────────────────────────────────────────────────────────────────
 function showAuthTab(tab) {
   document.getElementById("auth-login-form").style.display    = tab === "login"    ? "block" : "none";
   document.getElementById("auth-register-form").style.display = tab === "register" ? "block" : "none";
-}
-
-async function handleGoogleLogin() {
-  try {
-    await loginGoogle();
-    closeModal("modal-auth");
-    toast("Welcome back!");
-  } catch (e) {
-    showAuthError(e.message);
-  }
+  document.getElementById("auth-error").style.display = "none";
 }
 
 function showAuthError(msg) {
-  let el = document.getElementById("auth-error");
+  const el = document.getElementById("auth-error");
   if (!el) return;
-  el.textContent = msg.replace("Firebase: ", "").replace(/ *\(.*\)/, "");
+  el.textContent = msg.replace("Firebase: ","").replace(/ *\(.*\)/,"");
   el.style.display = "block";
 }
 
-// ─── Profile modal ────────────────────────────────────────────────────────────
+async function handleGoogleLogin() {
+  try { await loginGoogle(); closeModal("modal-auth"); toast("Welcome!"); }
+  catch (e) { showAuthError(e.message); }
+}
+
+// ─── Profile ──────────────────────────────────────────────────────────────────
 function openProfileModal() {
   const user = getCurrentUser();
   if (!user) return;
-  const doc = state.userDoc;
-  const rec = doc?.record || { wins:0, losses:0, pushes:0 };
-
-  document.getElementById("profile-name").textContent  = user.displayName || "Bettor";
-  document.getElementById("profile-email").textContent = user.email || "";
+  const rec = state.userDoc?.record || { wins:0, losses:0, pushes:0 };
+  document.getElementById("profile-name").textContent   = user.displayName || "Bettor";
+  document.getElementById("profile-email").textContent  = user.email || "";
   document.getElementById("profile-wins").textContent   = rec.wins;
   document.getElementById("profile-losses").textContent = rec.losses;
   document.getElementById("profile-pushes").textContent = rec.pushes;
   openModal("modal-profile");
 }
 
-// ─── Settings modal ───────────────────────────────────────────────────────────
+// ─── Settings ─────────────────────────────────────────────────────────────────
 async function openSettingsModal() {
-  // Load stored keys
   const user = getCurrentUser();
   if (user) {
+    // Always load from Firebase (source of truth)
     const keys = await getUserKeys(user.uid);
     for (const [k, v] of Object.entries(keys)) {
       const el = document.getElementById(`key-${k}`);
       if (el) el.value = v;
     }
   } else {
-    // Load from localStorage
-    for (const name of ["oddsApi", "gemini", "groq", "openrouter", "balldontlie"]) {
+    // Guest: load from localStorage
+    for (const name of ["oddsApi","gemini","groq","openrouter","balldontlie"]) {
       const el = document.getElementById(`key-${name}`);
       if (el) el.value = localStorage.getItem(KEYS[name]) || "";
     }
@@ -241,32 +247,25 @@ async function openSettingsModal() {
 
 async function saveSettings() {
   const keys = {};
-  for (const name of ["oddsApi", "gemini", "groq", "openrouter", "balldontlie"]) {
+  for (const name of ["oddsApi","gemini","groq","openrouter","balldontlie"]) {
     const el = document.getElementById(`key-${name}`);
     keys[name] = el?.value?.trim() || "";
     localStorage.setItem(KEYS[name], keys[name]);
   }
   const user = getCurrentUser();
-  if (user) await saveUserKeys(user.uid, keys);
+  if (user) await saveUserKeys(user.uid, keys);  // saves to Firebase + localStorage
   closeModal("modal-settings");
   toast("Settings saved");
-  // Reload with new keys
-  await loadSport(state.activeSport);
+  await loadSport(state.activeSport, state.activeDate);
 }
 
-// ─── Modal setup ─────────────────────────────────────────────────────────────
+// ─── Modals ───────────────────────────────────────────────────────────────────
 function setupModals() {
-  // Close on overlay click
-  document.querySelectorAll(".modal-overlay").forEach(overlay => {
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) closeAllModals();
-    });
-  });
-  document.querySelectorAll(".modal-close").forEach(btn => {
-    btn.addEventListener("click", () => closeAllModals());
-  });
+  document.querySelectorAll(".modal-overlay").forEach(o =>
+    o.addEventListener("click", e => { if (e.target === o) closeAllModals(); })
+  );
+  document.querySelectorAll(".modal-close").forEach(b => b.addEventListener("click", closeAllModals));
 
-  // Settings tabs
   document.querySelectorAll(".settings-tab").forEach(tab => {
     tab.addEventListener("click", () => {
       document.querySelectorAll(".settings-tab").forEach(t => t.classList.remove("active"));
@@ -276,49 +275,28 @@ function setupModals() {
     });
   });
 
-  // Settings open
-  document.getElementById("btn-settings-open")?.addEventListener("click", openSettingsModal);
-
-  // Save settings
   document.getElementById("btn-save-settings")?.addEventListener("click", saveSettings);
 
-  // Auth
-  document.getElementById("btn-google-login")?.addEventListener("click",  handleGoogleLogin);
+  document.getElementById("btn-google-login")?.addEventListener("click",    handleGoogleLogin);
   document.getElementById("btn-google-register")?.addEventListener("click", handleGoogleLogin);
 
   document.getElementById("auth-login-btn")?.addEventListener("click", async () => {
-    const email = document.getElementById("login-email")?.value;
-    const pass  = document.getElementById("login-password")?.value;
-    try {
-      await loginEmail(email, pass);
-      closeModal("modal-auth");
-      toast("Welcome back!");
-    } catch (e) { showAuthError(e.message); }
+    try { await loginEmail(document.getElementById("login-email")?.value, document.getElementById("login-password")?.value); closeModal("modal-auth"); toast("Welcome back!"); }
+    catch (e) { showAuthError(e.message); }
   });
 
   document.getElementById("auth-register-btn")?.addEventListener("click", async () => {
-    const name  = document.getElementById("register-name")?.value;
-    const email = document.getElementById("register-email")?.value;
-    const pass  = document.getElementById("register-password")?.value;
-    try {
-      await registerEmail(email, pass, name);
-      closeModal("modal-auth");
-      toast("Account created! Welcome to -110");
-    } catch (e) { showAuthError(e.message); }
+    try { await registerEmail(document.getElementById("register-email")?.value, document.getElementById("register-password")?.value, document.getElementById("register-name")?.value); closeModal("modal-auth"); toast("Account created!"); }
+    catch (e) { showAuthError(e.message); }
   });
 
   document.getElementById("link-to-register")?.addEventListener("click", () => showAuthTab("register"));
   document.getElementById("link-to-login")?.addEventListener("click",    () => showAuthTab("login"));
 
-  // Logout
   document.getElementById("btn-logout")?.addEventListener("click", async () => {
-    await logout();
-    closeModal("modal-profile");
-    toast("Signed out");
-    renderGuestUI();
+    await logout(); closeModal("modal-profile"); toast("Signed out"); state.user = null; state.userDoc = null; renderGuestUI();
   });
 
-  // Key visibility toggles
   document.querySelectorAll(".key-toggle").forEach(btn => {
     btn.addEventListener("click", () => {
       const input = btn.previousElementSibling;
@@ -328,15 +306,10 @@ function setupModals() {
     });
   });
 
-  // Settings button in nav (will be set dynamically, but add fallback)
-  document.getElementById("btn-settings-open-2")?.addEventListener("click", openSettingsModal);
-
-  // Refresh btn
-  document.getElementById("btn-refresh")?.addEventListener("click", () => loadSport(state.activeSport));
+  document.getElementById("btn-refresh")?.addEventListener("click", () => loadSport(state.activeSport, state.activeDate));
 }
 
-// Make openModal globally accessible for inline onclick
-window.openModal = openModal;
+window.openModal      = openModal;
+window.closeAllModals = closeAllModals;
 
-// ─── Start ────────────────────────────────────────────────────────────────────
 init();

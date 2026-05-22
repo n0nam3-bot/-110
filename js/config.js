@@ -1,38 +1,38 @@
 const CONFIG = {
   firebase: {
-    apiKey: "AIzaSyA8oe82ST31XfyEJ3dqmNF5FthK_FEyT-8",
-    authDomain: "project-4868291462124176670.firebaseapp.com",
-    projectId: "project-4868291462124176670",
-    storageBucket: "project-4868291462124176670.firebasestorage.app",
-    messagingSenderId: "828639177624",
-    appId: "1:828639177624:web:cff22a16ad5ea85608d9ed",
-    measurementId: "G-LY4FSHLL3W"
+    apiKey:            "FIREBASE_API_KEY",
+    authDomain:        "FIREBASE_AUTH_DOMAIN",
+    projectId:         "FIREBASE_PROJECT_ID",
+    storageBucket:     "FIREBASE_STORAGE_BUCKET",
+    messagingSenderId: "FIREBASE_MESSAGING_SENDER_ID",
+    appId:             "FIREBASE_APP_ID"
   },
   app: {
     name: "-110", tagline: "Sharp picks. No noise.",
-    baseUrl: "https://n0nam3-bot.github.io/-110", version: "1.0.0"
+    baseUrl: "https://n0nam3-bot.github.io/-110", version: "1.0.1"
   },
   cache: {
     odds: 15*60*1000, picks: 30*60*1000,
     espn: 5*60*1000, injuries: 60*60*1000, stats: 30*60*1000
   },
   sports: {
-    nba:   { label:"NBA",   emoji:"🏀", espnSport:"basketball", espnLeague:"nba",                    oddsKey:"basketball_nba",          props:["player_points","player_rebounds","player_assists","player_threes","player_blocks","player_steals","player_points_rebounds_assists"] },
-    nfl:   { label:"NFL",   emoji:"🏈", espnSport:"football",   espnLeague:"nfl",                    oddsKey:"americanfootball_nfl",     props:["player_pass_tds","player_pass_yds","player_rush_yds","player_reception_yds","player_receptions","player_anytime_td"] },
-    mlb:   { label:"MLB",   emoji:"⚾", espnSport:"baseball",   espnLeague:"mlb",                    oddsKey:"baseball_mlb",            props:["batter_home_runs","batter_hits","batter_rbis","pitcher_strikeouts","pitcher_outs"] },
-    nhl:   { label:"NHL",   emoji:"🏒", espnSport:"hockey",     espnLeague:"nhl",                    oddsKey:"icehockey_nhl",           props:["player_goals","player_assists","player_shots_on_goal","player_points"] },
-    ncaab: { label:"NCAAB", emoji:"🏀", espnSport:"basketball", espnLeague:"mens-college-basketball",oddsKey:"basketball_ncaab",        props:[] },
-    ncaaf: { label:"NCAAF", emoji:"🏈", espnSport:"football",   espnLeague:"college-football",       oddsKey:"americanfootball_ncaaf",  props:[] },
-    mls:   { label:"MLS",   emoji:"⚽", espnSport:"soccer",     espnLeague:"usa.1",                  oddsKey:"soccer_usa_mls",          props:["player_goal_scorer_anytime","player_shots_on_target"] }
+    nba:   { label:"NBA",   emoji:"🏀", espnSport:"basketball", espnLeague:"nba",                    oddsKey:"basketball_nba",              props:["player_points","player_rebounds","player_assists","player_threes","player_blocks","player_steals","player_points_rebounds_assists"] },
+    nfl:   { label:"NFL",   emoji:"🏈", espnSport:"football",   espnLeague:"nfl",                    oddsKey:"americanfootball_nfl",         props:["player_pass_tds","player_pass_yds","player_rush_yds","player_reception_yds","player_receptions","player_anytime_td"] },
+    mlb:   { label:"MLB",   emoji:"⚾", espnSport:"baseball",   espnLeague:"mlb",                    oddsKey:"baseball_mlb",                props:["batter_home_runs","batter_hits","batter_rbis","pitcher_strikeouts","pitcher_outs"] },
+    nhl:   { label:"NHL",   emoji:"🏒", espnSport:"hockey",     espnLeague:"nhl",                    oddsKey:"icehockey_nhl",               props:["player_goals","player_assists","player_shots_on_goal","player_points"] },
+    mma:   { label:"MMA",   emoji:"🥊", espnSport:"mma",        espnLeague:"ufc",                    oddsKey:"mma_mixed_martial_arts",       props:["fighter_method_of_victory","fighter_win_in_round"] },
+    ncaab: { label:"NCAAB", emoji:"🏀", espnSport:"basketball", espnLeague:"mens-college-basketball",oddsKey:"basketball_ncaab",            props:[] },
+    ncaaf: { label:"NCAAF", emoji:"🏈", espnSport:"football",   espnLeague:"college-football",       oddsKey:"americanfootball_ncaaf",      props:[] },
+    mls:   { label:"MLS",   emoji:"⚽", espnSport:"soccer",     espnLeague:"usa.1",                  oddsKey:"soccer_usa_mls",              props:["player_goal_scorer_anytime","player_shots_on_target"] }
   },
   espn: {
-    scoreboard:   (s,l)    => `https://site.api.espn.com/apis/site/v2/sports/${s}/${l}/scoreboard`,
-    teamStats:    (s,l,id) => `https://site.api.espn.com/apis/site/v2/sports/${s}/${l}/teams/${id}/statistics`,
-    teamSchedule: (s,l,id) => `https://site.api.espn.com/apis/site/v2/sports/${s}/${l}/teams/${id}/schedule`
+    scoreboard:   (s,l,date) => `https://site.api.espn.com/apis/site/v2/sports/${s}/${l}/scoreboard${date ? `?dates=${date}` : ""}`,
+    teamStats:    (s,l,id)   => `https://site.api.espn.com/apis/site/v2/sports/${s}/${l}/teams/${id}/statistics`,
+    teamSchedule: (s,l,id)   => `https://site.api.espn.com/apis/site/v2/sports/${s}/${l}/teams/${id}/schedule`
   },
-  oddsApi:  { base:"https://api.the-odds-api.com/v4", regions:"us", markets:"h2h,spreads,totals", format:"american" },
-  sleeper:  { players:"https://api.sleeper.app/v1/players/nfl" },
-  balldontlie:{ base:"https://api.balldontlie.io/v1" },
+  oddsApi:     { base:"https://api.the-odds-api.com/v4", regions:"us", markets:"h2h,spreads,totals", format:"american" },
+  sleeper:     { players:"https://api.sleeper.app/v1/players/nfl" },
+  balldontlie: { base:"https://api.balldontlie.io/v1" },
   llm: {
     gemini:     { endpoint:(k)=>`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${k}`, model:"gemini-1.5-flash" },
     groq:       { endpoint:"https://api.groq.com/openai/v1/chat/completions", model:"llama-3.3-70b-versatile" },

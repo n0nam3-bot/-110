@@ -1,10 +1,8 @@
-// ── Firebase Auth + Firestore wrapper ──
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword,
          createUserWithEmailAndPassword, signOut, GoogleAuthProvider, updateProfile
        } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, updateDoc,
-         collection, query, orderBy, limit, getDocs, serverTimestamp
+import { getFirestore, doc, getDoc, setDoc, updateDoc, serverTimestamp
        } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 let app, auth, db;
@@ -15,7 +13,6 @@ export function initFirebase() {
   db   = getFirestore(app);
 }
 
-// ── Auth ──
 export function getCurrentUser() { return auth?.currentUser || null; }
 
 export function onUserChange(cb) {
@@ -41,22 +38,17 @@ export async function registerEmail(email, password, displayName) {
 
 export async function logout() { return signOut(auth); }
 
-// ── User doc ──
 export async function ensureUserDoc(user) {
   if (!db || !user) return;
-  const ref = doc(db, "users", user.uid);
+  const ref  = doc(db, "users", user.uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
     await setDoc(ref, {
-      uid:         user.uid,
-      displayName: user.displayName || "Bettor",
-      email:       user.email,
-      createdAt:   serverTimestamp(),
-      picks:       [],
-      savedPicks:  [],
-      record:      { wins:0, losses:0, pushes:0 },
-      keys:        {},
-      prefs:       { defaultSport:"nba", notifications:false }
+      uid: user.uid, displayName: user.displayName || "Bettor",
+      email: user.email, createdAt: serverTimestamp(),
+      picks: [], savedPicks: [],
+      record: { wins:0, losses:0, pushes:0 },
+      keys: {}, prefs: { defaultSport:"nba", notifications:false }
     });
   }
 }
@@ -72,7 +64,7 @@ export async function updateUserDoc(uid, data) {
   await updateDoc(doc(db, "users", uid), data);
 }
 
-// ── Pick cache in Firestore (shared across all users) ──
+// ── Pick cache ──────────────────────────────────────────────────────────────
 export async function getCachedPick(gameId) {
   if (!db) return null;
   try {
@@ -87,22 +79,17 @@ export async function getCachedPick(gameId) {
 
 export async function setCachedPick(gameId, pickData) {
   if (!db) return;
-  try {
-    await setDoc(doc(db, "pick_cache", gameId), {
-      ...pickData, cachedAt: Date.now()
-    });
-  } catch {}
+  try { await setDoc(doc(db, "pick_cache", gameId), { ...pickData, cachedAt: Date.now() }); } catch {}
 }
 
-// ── User saved picks ──
+// ── Saved picks ─────────────────────────────────────────────────────────────
 export async function savePick(uid, pick) {
   if (!db || !uid) return;
   const ref  = doc(db, "users", uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) return;
   const saved = snap.data().savedPicks || [];
-  const exists = saved.find(p => p.id === pick.id);
-  if (!exists) {
+  if (!saved.find(p => p.id === pick.id)) {
     saved.unshift({ ...pick, savedAt: Date.now() });
     await updateDoc(ref, { savedPicks: saved.slice(0, 100) });
   }
@@ -113,19 +100,24 @@ export async function unsavePick(uid, pickId) {
   const ref  = doc(db, "users", uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) return;
-  const saved = (snap.data().savedPicks || []).filter(p => p.id !== pickId);
-  await updateDoc(ref, { savedPicks: saved });
+  await updateDoc(ref, { savedPicks: (snap.data().savedPicks || []).filter(p => p.id !== pickId) });
 }
 
-// ── Save encrypted user keys ──
+// ── Keys: store encrypted in Firestore, sync to localStorage ───────────────
+// IMPORTANT: keys are stored per-user in Firebase so they follow the account
+// across all devices. On every login we push them to localStorage so the
+// rest of the app can read them synchronously without extra async calls.
+
+function _enc(v) { try { return v ? btoa(v) : ""; } catch { return ""; } }
+function _dec(v) { try { return v ? atob(v) : ""; } catch { return ""; } }
+
 export async function saveUserKeys(uid, keys) {
   if (!db || !uid) return;
-  // Simple base64 obfuscation (real encryption needs a backend)
   const enc = {};
-  for (const [k, v] of Object.entries(keys)) {
-    enc[k] = v ? btoa(v) : "";
-  }
+  for (const [k, v] of Object.entries(keys)) enc[k] = _enc(v);
   await updateDoc(doc(db, "users", uid), { keys: enc });
+  // Also sync to localStorage immediately
+  _writeKeysToLocalStorage(keys);
 }
 
 export async function getUserKeys(uid) {
@@ -134,8 +126,32 @@ export async function getUserKeys(uid) {
   if (!snap.exists()) return {};
   const enc = snap.data().keys || {};
   const dec = {};
-  for (const [k, v] of Object.entries(enc)) {
-    try { dec[k] = v ? atob(v) : ""; } catch { dec[k] = ""; }
-  }
+  for (const [k, v] of Object.entries(enc)) dec[k] = _dec(v);
   return dec;
+}
+
+// Called on every login — syncs Firebase keys → localStorage so keys
+// are immediately available on any device without opening Settings.
+export async function syncUserKeysToLocalStorage(uid) {
+  try {
+    const keys = await getUserKeys(uid);
+    _writeKeysToLocalStorage(keys);
+  } catch (e) {
+    console.warn("Key sync failed:", e.message);
+  }
+}
+
+function _writeKeysToLocalStorage(keys) {
+  const map = {
+    oddsApi:     KEYS.oddsApi,
+    gemini:      KEYS.gemini,
+    groq:        KEYS.groq,
+    openrouter:  KEYS.openrouter,
+    balldontlie: KEYS.balldontlie
+  };
+  for (const [name, lsKey] of Object.entries(map)) {
+    if (keys[name] !== undefined) {
+      localStorage.setItem(lsKey, keys[name]);
+    }
+  }
 }
