@@ -10,7 +10,7 @@ const CONFIG = {
   },
   app: {
     name: "-110", tagline: "Sharp picks. No noise.",
-    baseUrl: "https://n0nam3-bot.github.io/-110", version: "1.0.3"
+    baseUrl: "https://n0nam3-bot.github.io/-110", version: "1.0.4"
   },
   cache: {
     odds: 15*60*1000, picks: 30*60*1000,

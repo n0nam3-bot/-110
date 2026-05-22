@@ -56,6 +56,9 @@ async function callOpenRouter(prompt, key) {
   return d.choices?.[0]?.message?.content || "";
 }
 
+// How long to wait before retrying a rate-limited provider (ms)
+const _RETRY_DELAYS = [8000, 20000]; // 8 s then 20 s
+
 async function callLLM(prompt) {
   const geminiKey     = getUserKey("gemini");
   const groqKey       = getUserKey("groq");
@@ -66,9 +69,28 @@ async function callLLM(prompt) {
     { name:"openrouter", fn: () => callOpenRouter(prompt, openrouterKey), available: !!openrouterKey }
   ].filter(p => p.available);
   if (!providers.length) throw new Error("NO_KEYS");
+
   for (const p of providers) {
-    try { const text = await p.fn(); if (text?.trim()) return { text, provider: p.name }; }
-    catch (e) { console.warn(`LLM ${p.name} failed:`, e.message); }
+    let lastErr = null;
+    for (let attempt = 0; attempt <= _RETRY_DELAYS.length; attempt++) {
+      try {
+        const text = await p.fn();
+        if (text?.trim()) return { text, provider: p.name };
+        break; // empty response — try next provider
+      } catch (e) {
+        lastErr = e;
+        const is429 = e.message.includes("429") || e.message.includes("rate");
+        if (is429 && attempt < _RETRY_DELAYS.length) {
+          const wait = _RETRY_DELAYS[attempt];
+          console.log(`LLM ${p.name} rate-limited (attempt ${attempt + 1}), retrying in ${wait / 1000}s…`);
+          await new Promise(r => setTimeout(r, wait));
+          continue; // retry same provider
+        }
+        // Non-429 error or retries exhausted — move to next provider
+        console.warn(`LLM ${p.name} failed:`, e.message);
+        break;
+      }
+    }
   }
   throw new Error("ALL_PROVIDERS_FAILED");
 }

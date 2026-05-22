@@ -220,13 +220,25 @@ async function _fetchAndAnalyze(sportKey, date) {
       attachToggleHandlers();
     }
 
-    // Analyse each game, streaming results into the UI
-    for (const game of upcoming) {
+    // Analyse each game, streaming results into the UI.
+    // Games are processed one at a time with a small delay between each to
+    // stay under free-tier rate limits (Gemini: ~15 req/min, Groq: ~30 req/min).
+    for (let gi = 0; gi < upcoming.length; gi++) {
+      const game = upcoming[gi];
+
+      // Pace requests: skip delay on first game, then wait 5 s between games.
+      // This keeps us at ~12 req/min on a 12-game card, well under all free limits.
+      if (gi > 0) await new Promise(r => setTimeout(r, 5000));
+
+      // If the user switched to a different sport while we were loading this one,
+      // keep filling the cache silently but stop touching the DOM.
+      const isVisible = sportKey === state.activeSport;
+
       try {
         const pickResult = await getPicksForGame(game);
         _sportCache[sportKey].pickData.push(pickResult);
 
-        if (sportKey === state.activeSport) {
+        if (isVisible) {
           const card = document.getElementById(`card-${game.id}`);
           if (card) card.outerHTML = renderGameCard(game, pickResult, state.savedIds);
           attachToggleHandlers();
@@ -236,7 +248,7 @@ async function _fetchAndAnalyze(sportKey, date) {
         }
       } catch (e) {
         console.warn(`Game ${game.id}:`, e.message);
-        if (sportKey === state.activeSport) {
+        if (isVisible) {
           const card = document.getElementById(`card-${game.id}`);
           if (card) card.outerHTML = renderGameCard(game, { error: e.message, allPicks:[], bestBet:null }, state.savedIds);
         }
