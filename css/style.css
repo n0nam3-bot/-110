@@ -885,3 +885,17 @@ button { cursor: pointer; font-family: inherit; border: none; }
   color: var(--accent);
   margin-bottom: 12px;
 }
+
+/* ── MMA Promotion badge ─────────────────────────────────────────────────── */
+.mma-promotion-badge {
+  display: inline-block;
+  font-size: .60rem;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent, #b5f23d);
+  color: #0a0a0a;
+  margin-bottom: 2px;
+}
