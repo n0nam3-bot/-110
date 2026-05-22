@@ -200,10 +200,25 @@ function showAuthTab(tab) {
   document.getElementById("auth-error").style.display = "none";
 }
 
-function showAuthError(msg) {
+function showAuthError(raw) {
   const el = document.getElementById("auth-error");
   if (!el) return;
-  el.textContent = msg.replace("Firebase: ","").replace(/ *\(.*\)/,"");
+  // Map Firebase error codes to plain English
+  const codes = {
+    "auth/invalid-email":            "Invalid email address.",
+    "auth/user-not-found":           "No account found with that email.",
+    "auth/wrong-password":           "Incorrect password.",
+    "auth/email-already-in-use":     "An account with that email already exists.",
+    "auth/weak-password":            "Password must be at least 6 characters.",
+    "auth/too-many-requests":        "Too many attempts. Try again in a few minutes.",
+    "auth/network-request-failed":   "Network error — check your connection.",
+    "auth/popup-closed-by-user":     "Sign-in popup was closed. Please try again.",
+    "auth/cancelled-popup-request":  "Sign-in cancelled.",
+    "auth/invalid-api-key":          "Firebase API key is invalid. Check js/config.js.",
+    "auth/configuration-not-found":  "Firebase not configured. Replace FIREBASE_* placeholders in js/config.js.",
+  };
+  const match = Object.keys(codes).find(c => raw.includes(c));
+  el.textContent = match ? codes[match] : raw.replace("Firebase: ","").replace(/ *\(.*\)/,"") || "Authentication failed. Check your Firebase setup in js/config.js.";
   el.style.display = "block";
 }
 

@@ -8,9 +8,46 @@ import { getFirestore, doc, getDoc, setDoc, updateDoc, serverTimestamp
 let app, auth, db;
 
 export function initFirebase() {
+  // Detect un-replaced placeholders and bail with a clear message
+  if (CONFIG.firebase.apiKey.startsWith("FIREBASE_")) {
+    console.error(
+      "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+      " -110 SETUP REQUIRED\n" +
+      " Open js/config.js and replace the\n" +
+      " FIREBASE_* placeholders with your real\n" +
+      " Firebase project credentials.\n" +
+      " Get them free at: console.firebase.google.com\n" +
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    );
+    showFirebaseSetupBanner();
+    return;
+  }
   app  = initializeApp(CONFIG.firebase);
   auth = getAuth(app);
   db   = getFirestore(app);
+}
+
+function showFirebaseSetupBanner() {
+  const existing = document.getElementById("firebase-setup-banner");
+  if (existing) return;
+  const banner = document.createElement("div");
+  banner.id = "firebase-setup-banner";
+  banner.style.cssText = [
+    "position:fixed","top:0","left:0","right:0","z-index:9999",
+    "background:#1a1a00","border-bottom:2px solid #b5f23d",
+    "padding:14px 20px","font-family:monospace","font-size:13px",
+    "color:#b5f23d","line-height:1.6","text-align:center"
+  ].join(";");
+  banner.innerHTML = [
+    "<strong>⚙ -110 Setup Required</strong><br>",
+    "Open <code style='background:#2a2a00;padding:2px 6px;border-radius:3px'>js/config.js</code> and replace the ",
+    "<code style='background:#2a2a00;padding:2px 6px;border-radius:3px'>FIREBASE_*</code> placeholders ",
+    "with your real Firebase credentials.<br>",
+    "<span style='color:#888;font-size:11px'>Get them free at ",
+    "<a href='https://console.firebase.google.com' target='_blank' style='color:#b5f23d'>console.firebase.google.com</a>",
+    " → Project Settings → Your Apps → Web app config</span>"
+  ].join("");
+  document.body.prepend(banner);
 }
 
 export function getCurrentUser() { return auth?.currentUser || null; }
