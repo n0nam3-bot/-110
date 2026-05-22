@@ -10,7 +10,7 @@ const CONFIG = {
   },
   app: {
     name: "-110", tagline: "Sharp picks. No noise.",
-    baseUrl: "https://n0nam3-bot.github.io/-110", version: "1.0.2"
+    baseUrl: "https://n0nam3-bot.github.io/-110", version: "1.0.3"
   },
   cache: {
     odds: 15*60*1000, picks: 30*60*1000,
@@ -35,9 +35,9 @@ const CONFIG = {
   sleeper:     { players:"https://api.sleeper.app/v1/players/nfl" },
   balldontlie: { base:"https://api.balldontlie.io/v1" },
   llm: {
-    gemini:     { endpoint:(k)=>`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${k}`, model:"gemini-1.5-flash" },
-    groq:       { endpoint:"https://api.groq.com/openai/v1/chat/completions", model:"llama-3.3-70b-versatile" },
-    openrouter: { endpoint:"https://openrouter.ai/api/v1/chat/completions",   models:["google/gemma-2-9b-it:free","meta-llama/llama-3.1-8b-instruct:free","mistralai/mistral-7b-instruct:free"] }
+    gemini:     { endpoint:(k)=>`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${k}`, model:"gemini-2.0-flash-lite" },
+    groq:       { endpoint:"https://api.groq.com/openai/v1/chat/completions", model:"llama-3.3-70b-versatile", fallbackModel:"llama-3.1-8b-instant" },
+    openrouter: { endpoint:"https://openrouter.ai/api/v1/chat/completions",   models:["meta-llama/llama-3.2-3b-instruct:free","qwen/qwen-2.5-7b-instruct:free","google/gemma-3-4b-it:free"] }
   },
   grades: {
     S:{ minConfidence:8.5, minEdge:7.0, label:"S", color:"#b5f23d" },

@@ -258,20 +258,35 @@ async function _fetchAndAnalyze(sportKey, date) {
   }
 }
 
-/** Silently pre-populate the cache for all sports the user hasn't visited yet. */
+/** Silently pre-populate the cache for sports the user hasn't visited yet.
+ *  Deliberately conservative: waits 20 s after active sport finishes,
+ *  then loads one sport at a time with a 30 s gap between each — this
+ *  avoids flooding Groq/Gemini/OpenRouter with simultaneous requests.
+ */
 function _preloadOtherSports(date) {
   const others = Object.keys(CONFIG.sports).filter(sk => sk !== state.activeSport);
-  let delay = 1500; // stagger requests so they don't hammer APIs simultaneously
+  // Sequential queue: each waits for the previous to finish
+  let chain = Promise.resolve();
+  let delay = 20000; // start 20 s after active sport completes
   for (const sk of others) {
-    if (_sportCache[sk] || _sportLoading[sk]) continue; // already done or in-flight
-    setTimeout(() => {
-      if (!_sportLoading[sk] && !_sportCache[sk]) {
-        const p = _fetchAndAnalyze(sk, date);
-        _sportLoading[sk] = p;
-        p.finally(() => { delete _sportLoading[sk]; });
-      }
-    }, delay);
-    delay += 2000;
+    ((sport, initialDelay) => {
+      setTimeout(() => {
+        // Only proceed if: tab is visible, not already cached/loading, and user hasn't switched date
+        if (document.visibilityState !== "visible") return;
+        if (_sportCache[sport] || _sportLoading[sport]) return;
+        chain = chain.then(async () => {
+          if (_sportCache[sport] || _sportLoading[sport]) return;
+          if (document.visibilityState !== "visible") return;
+          const p = _fetchAndAnalyze(sport, date);
+          _sportLoading[sport] = p;
+          p.finally(() => { delete _sportLoading[sport]; });
+          await p;
+          // 15 s pause between sports to avoid rate limits
+          await new Promise(r => setTimeout(r, 15000));
+        });
+      }, initialDelay);
+    })(sk, delay);
+    delay += 5000; // stagger start times so they don't all fire at once
   }
 }
 
@@ -332,11 +347,12 @@ function renderGuestUI() {
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 function showAuthTab(tab) {
-  document.getElementById("auth-login-form").style.display    = tab === "login"    ? "block" : "none";
-  document.getElementById("auth-register-form").style.display = tab === "register" ? "block" : "none";
-  document.getElementById("auth-reset-form").style.display    = tab === "reset"    ? "block" : "none";
-  document.getElementById("auth-error").style.display  = "none";
-  document.getElementById("auth-success").style.display = "none";
+  const setDisplay = (id, val) => { const el = document.getElementById(id); if (el) el.style.display = val; };
+  setDisplay("auth-login-form",    tab === "login"    ? "block" : "none");
+  setDisplay("auth-register-form", tab === "register" ? "block" : "none");
+  setDisplay("auth-reset-form",    tab === "reset"    ? "block" : "none");
+  setDisplay("auth-error",   "none");
+  setDisplay("auth-success", "none");
 }
 
 function showAuthError(raw) {

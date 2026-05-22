@@ -20,15 +20,21 @@ async function callGemini(prompt, key) {
 
 async function callGroq(prompt, key) {
   if (!key) throw new Error("no_key");
-  const body = {
-    model: CONFIG.llm.groq.model,
-    messages: [{ role:"system", content:"You are a sharp sports analytics AI. Return only valid JSON." }, { role:"user", content: prompt }],
-    temperature: 0.3, max_tokens: 2048
-  };
-  const r = await fetch(CONFIG.llm.groq.endpoint, { method:"POST", headers:{ "Content-Type":"application/json", Authorization:`Bearer ${key}` }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error(`groq_${r.status}`);
-  const d = await r.json();
-  return d.choices?.[0]?.message?.content || "";
+  // Try primary model first; on 429 (rate limit) retry with the lighter fallback model
+  const models = [CONFIG.llm.groq.model, CONFIG.llm.groq.fallbackModel].filter(Boolean);
+  for (const model of models) {
+    const body = {
+      model,
+      messages: [{ role:"system", content:"You are a sharp sports analytics AI. Return only valid JSON." }, { role:"user", content: prompt }],
+      temperature: 0.3, max_tokens: 2048
+    };
+    const r = await fetch(CONFIG.llm.groq.endpoint, { method:"POST", headers:{ "Content-Type":"application/json", Authorization:`Bearer ${key}` }, body: JSON.stringify(body) });
+    if (r.status === 429 && model !== models[models.length - 1]) continue; // try fallback
+    if (!r.ok) throw new Error(`groq_${r.status}`);
+    const d = await r.json();
+    return d.choices?.[0]?.message?.content || "";
+  }
+  throw new Error("groq_rate_limited");
 }
 
 async function callOpenRouter(prompt, key) {
