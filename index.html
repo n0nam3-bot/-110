@@ -43,6 +43,7 @@
     <button class="sport-tab" data-sport="nfl">🏈 NFL</button>
     <button class="sport-tab" data-sport="mlb">⚾ MLB</button>
     <button class="sport-tab" data-sport="nhl">🏒 NHL</button>
+    <button class="sport-tab" data-sport="mma">🥊 MMA/UFC</button>
     <button class="sport-tab" data-sport="ncaab">🏀 NCAAB</button>
     <button class="sport-tab" data-sport="ncaaf">🏈 NCAAF</button>
     <button class="sport-tab" data-sport="mls">⚽ MLS</button>
@@ -72,7 +73,12 @@
       <span class="lbl">S-Grade Picks</span>
     </div>
     <div id="today-date"></div>
-    <button class="nav-btn" id="btn-refresh" style="margin-left:auto" title="Refresh picks">↻ Refresh</button>
+    <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+      <label style="font-size:.72rem;color:var(--text2);white-space:nowrap">📅 Date</label>
+      <input type="date" id="date-selector" class="form-input" style="width:150px;padding:6px 10px;font-size:.78rem">
+      <button class="nav-btn" id="btn-today" title="Go to today" style="padding:6px 10px;font-size:.75rem">Today</button>
+      <button class="nav-btn" id="btn-refresh" title="Refresh picks" style="padding:6px 10px;font-size:.75rem">↻</button>
+    </div>
   </div>
 </div>
 
