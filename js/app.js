@@ -8,6 +8,12 @@ import { renderGameCard, renderBestBetsSidebar, renderSavedSidebar,
          renderSummaryBar, attachSaveHandlers, attachToggleHandlers,
          renderSkeletons, toast, openModal, closeModal, closeAllModals } from "./ui.js";
 
+// ─── Per-sport result cache (survives tab switches) ───────────────────────────
+// { [sportKey]: { games: [], pickData: [], loadedAt: number | null } }
+const _sportCache = {};
+// Tracks in-flight load promises so switching tabs mid-load doesn't double-fire
+const _sportLoading = {};
+
 let state = {
   user: null, userDoc: null,
   activeSport:  localStorage.getItem(KEYS.sport) || "nba",
@@ -16,6 +22,7 @@ let state = {
   loading: false
 };
 
+// ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
   initFirebase();
 
@@ -26,7 +33,6 @@ async function init() {
       await syncUserKeysToLocalStorage(user.uid);
       state.userDoc  = await getUserDoc(user.uid);
       state.savedIds = (state.userDoc?.savedPicks || []).map(p => p.id);
-      // Apply saved default sport preference
       const prefSport = state.userDoc?.prefs?.defaultSport;
       if (prefSport && CONFIG.sports[prefSport]) {
         state.activeSport = prefSport;
@@ -45,6 +51,7 @@ async function init() {
   setupModals();
   await loadSport(state.activeSport, state.activeDate);
   hideLoadingOverlay();
+  startAutoRefresh();
 }
 
 function hideLoadingOverlay() {
@@ -52,6 +59,7 @@ function hideLoadingOverlay() {
   if (el) { el.classList.add("hidden"); setTimeout(() => el.remove(), 400); }
 }
 
+// ─── Sport tabs ───────────────────────────────────────────────────────────────
 function setActiveSportTab(sport) {
   document.querySelectorAll(".sport-tab").forEach(t => t.classList.remove("active"));
   document.querySelector(`[data-sport="${sport}"]`)?.classList.add("active");
@@ -71,24 +79,99 @@ function setupSportTabs() {
   setActiveSportTab(state.activeSport);
 }
 
+// ─── Date selector ────────────────────────────────────────────────────────────
 function setupDateSelector() {
   const input = document.getElementById("date-selector");
   if (!input) return;
   input.value = new Date().toISOString().split("T")[0];
   input.addEventListener("change", () => {
+    // Changing the date invalidates the entire cache
+    Object.keys(_sportCache).forEach(k => delete _sportCache[k]);
     state.activeDate = input.value ? input.value.replace(/-/g, "") : null;
     loadSport(state.activeSport, state.activeDate);
   });
   document.getElementById("btn-today")?.addEventListener("click", () => {
+    Object.keys(_sportCache).forEach(k => delete _sportCache[k]);
     input.value = new Date().toISOString().split("T")[0];
     state.activeDate = null;
     loadSport(state.activeSport, null);
   });
 }
 
+// ─── Core load / cache logic ──────────────────────────────────────────────────
+
+/** Render the games-list from the in-memory cache for a sport. */
+function renderFromCache(sportKey) {
+  const cached = _sportCache[sportKey];
+  if (!cached) return;
+
+  const container = document.getElementById("games-list");
+  const upcoming  = cached.games.slice(0, 12);
+
+  // Reset sidebar stats
+  ["stat-games","stat-bestbets","stat-picks","stat-sgrades"].forEach(id => {
+    const el = document.getElementById(id); if (el) el.textContent = "–";
+  });
+
+  if (!upcoming.length) {
+    const s = CONFIG.sports[sportKey];
+    const dateLabel = state.activeDate
+      ? new Date(state.activeDate.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3"))
+          .toLocaleDateString("en-US", { weekday:"long", month:"long", day:"numeric" })
+      : "today";
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">${s?.emoji || "🏟"}</div>
+        <div class="title">No pre-game events</div>
+        <div class="desc">No upcoming ${s?.label} games found for ${dateLabel}.<br>Live and completed games are excluded — try another date.</div>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = upcoming.map(g => {
+    const pickResult = cached.pickData.find(pd => pd.gameId === g.id) || null;
+    return renderGameCard(g, pickResult, state.savedIds);
+  }).join("");
+
+  attachToggleHandlers();
+  attachSaveHandlers(cached.pickData, state.savedIds, onSaveChange);
+  renderBestBetsSidebar(cached.pickData);
+  renderSummaryBar(upcoming, cached.pickData);
+
+  // Keep global state in sync
+  state.games    = cached.games;
+  state.pickData = cached.pickData;
+}
+
+/**
+ * Primary load function.
+ * - If fresh cache exists (< 30 min) → renders instantly, no new requests.
+ * - If a load is already in-flight for this sport → shows skeletons and waits.
+ * - Otherwise → fetches fresh data, analyzes games, populates cache, updates UI live.
+ */
 async function loadSport(sportKey, date = null) {
-  state.loading  = true;
-  state.pickData = [];
+  state.activeSport = sportKey;
+
+  // ── Cache hit ──
+  const cached = _sportCache[sportKey];
+  if (cached && cached.loadedAt && (Date.now() - cached.loadedAt) < CONFIG.cache.picks) {
+    renderFromCache(sportKey);
+    return;
+  }
+
+  // ── Already in-flight ──
+  if (_sportLoading[sportKey]) {
+    // Show what we have so far (may be partial) then re-render when done
+    if (cached) renderFromCache(sportKey);
+    else renderSkeletons(document.getElementById("games-list"), 5);
+    _sportLoading[sportKey].then(() => {
+      if (state.activeSport === sportKey) renderFromCache(sportKey);
+    });
+    return;
+  }
+
+  // ── Fresh fetch ──
+  state.loading = true;
   const container = document.getElementById("games-list");
   renderSkeletons(container, 5);
   ["stat-games","stat-bestbets","stat-picks","stat-sgrades"].forEach(id => {
@@ -106,51 +189,113 @@ async function loadSport(sportKey, date = null) {
     return;
   }
 
-  try {
-    state.games = await loadGamesForSport(sportKey, date);
-    const upcoming = state.games.slice(0, 12);
+  const promise = _fetchAndAnalyze(sportKey, date);
+  _sportLoading[sportKey] = promise;
+  promise.finally(() => { delete _sportLoading[sportKey]; });
 
-    if (!upcoming.length) {
-      const s = CONFIG.sports[sportKey];
-      const dateLabel = date
-        ? new Date(date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")).toLocaleDateString("en-US", { weekday:"long", month:"long", day:"numeric" })
-        : "today";
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="icon">${s?.emoji || "🏟"}</div>
-          <div class="title">No pre-game events</div>
-          <div class="desc">No upcoming ${s?.label} games found for ${dateLabel}.<br>Live and completed games are excluded — try another date.</div>
-        </div>`;
-      state.loading = false;
-      return;
-    }
-
-    container.innerHTML = upcoming.map(g => renderGameCard(g, null, state.savedIds)).join("");
-    attachToggleHandlers();
-
-    for (let i = 0; i < upcoming.length; i++) {
-      const game = upcoming[i];
-      try {
-        const pickResult = await getPicksForGame(game);
-        state.pickData.push(pickResult);
-        const card = document.getElementById(`card-${game.id}`);
-        if (card) card.outerHTML = renderGameCard(game, pickResult, state.savedIds);
-        attachToggleHandlers();
-        attachSaveHandlers(state.pickData, state.savedIds, onSaveChange);
-        renderBestBetsSidebar(state.pickData);
-        renderSummaryBar(upcoming, state.pickData);
-      } catch (e) {
-        console.warn(`Game ${game.id}:`, e.message);
-        const card = document.getElementById(`card-${game.id}`);
-        if (card) card.outerHTML = renderGameCard(game, { error: e.message, allPicks:[], bestBet:null }, state.savedIds);
-      }
-    }
-  } catch (e) {
-    container.innerHTML = `<div class="empty-state"><div class="icon">⚠</div><div class="title">Failed to load</div><div class="desc">${e.message}</div></div>`;
-  }
+  await promise;
   state.loading = false;
+
+  // ── Background-preload the other sports once the active one is done ──
+  _preloadOtherSports(date);
 }
 
+async function _fetchAndAnalyze(sportKey, date) {
+  try {
+    const games    = await loadGamesForSport(sportKey, date);
+    const upcoming = games.slice(0, 12);
+
+    // Initialise cache slot so partial renders work while analysis runs
+    _sportCache[sportKey] = { games, pickData: [], loadedAt: null };
+
+    // Render initial cards (no picks yet) if this is the visible sport
+    if (sportKey === state.activeSport) {
+      const container = document.getElementById("games-list");
+      if (!upcoming.length) {
+        renderFromCache(sportKey); // empty-state render
+        _sportCache[sportKey].loadedAt = Date.now();
+        return;
+      }
+      container.innerHTML = upcoming.map(g => renderGameCard(g, null, state.savedIds)).join("");
+      attachToggleHandlers();
+    }
+
+    // Analyse each game, streaming results into the UI
+    for (const game of upcoming) {
+      try {
+        const pickResult = await getPicksForGame(game);
+        _sportCache[sportKey].pickData.push(pickResult);
+
+        if (sportKey === state.activeSport) {
+          const card = document.getElementById(`card-${game.id}`);
+          if (card) card.outerHTML = renderGameCard(game, pickResult, state.savedIds);
+          attachToggleHandlers();
+          attachSaveHandlers(_sportCache[sportKey].pickData, state.savedIds, onSaveChange);
+          renderBestBetsSidebar(_sportCache[sportKey].pickData);
+          renderSummaryBar(upcoming, _sportCache[sportKey].pickData);
+        }
+      } catch (e) {
+        console.warn(`Game ${game.id}:`, e.message);
+        if (sportKey === state.activeSport) {
+          const card = document.getElementById(`card-${game.id}`);
+          if (card) card.outerHTML = renderGameCard(game, { error: e.message, allPicks:[], bestBet:null }, state.savedIds);
+        }
+      }
+    }
+
+    _sportCache[sportKey].loadedAt = Date.now();
+
+    if (sportKey === state.activeSport) {
+      state.games    = games;
+      state.pickData = _sportCache[sportKey].pickData;
+    }
+
+  } catch (e) {
+    if (sportKey === state.activeSport) {
+      document.getElementById("games-list").innerHTML =
+        `<div class="empty-state"><div class="icon">⚠</div><div class="title">Failed to load</div><div class="desc">${e.message}</div></div>`;
+    }
+  }
+}
+
+/** Silently pre-populate the cache for all sports the user hasn't visited yet. */
+function _preloadOtherSports(date) {
+  const others = Object.keys(CONFIG.sports).filter(sk => sk !== state.activeSport);
+  let delay = 1500; // stagger requests so they don't hammer APIs simultaneously
+  for (const sk of others) {
+    if (_sportCache[sk] || _sportLoading[sk]) continue; // already done or in-flight
+    setTimeout(() => {
+      if (!_sportLoading[sk] && !_sportCache[sk]) {
+        const p = _fetchAndAnalyze(sk, date);
+        _sportLoading[sk] = p;
+        p.finally(() => { delete _sportLoading[sk]; });
+      }
+    }, delay);
+    delay += 2000;
+  }
+}
+
+// ─── 30-minute auto-refresh (only while tab is visible) ──────────────────────
+function startAutoRefresh() {
+  setInterval(() => {
+    if (document.visibilityState !== "visible") return;
+
+    // Stale-invalidate every cached sport
+    Object.keys(_sportCache).forEach(sk => {
+      const entry = _sportCache[sk];
+      if (entry?.loadedAt && (Date.now() - entry.loadedAt) >= CONFIG.cache.picks) {
+        delete _sportCache[sk];
+      }
+    });
+
+    // Reload the active sport immediately; others will lazy-reload on tab switch
+    if (!_sportLoading[state.activeSport]) {
+      loadSport(state.activeSport, state.activeDate);
+    }
+  }, CONFIG.cache.picks); // fires every 30 min
+}
+
+// ─── Save handler ─────────────────────────────────────────────────────────────
 async function onSaveChange() {
   if (state.user) {
     state.userDoc = await getUserDoc(state.user.uid);
@@ -233,13 +378,12 @@ function openProfileModal() {
   const user = getCurrentUser();
   if (!user) return;
   const rec = state.userDoc?.record || { wins:0, losses:0, pushes:0 };
-  document.getElementById("profile-name").textContent   = user.displayName || "Bettor";
+  document.getElementById("profile-name").textContent   = user.displayName || "Analyst";
   document.getElementById("profile-email").textContent  = user.email || "";
   document.getElementById("profile-wins").textContent   = rec.wins;
   document.getElementById("profile-losses").textContent = rec.losses;
   document.getElementById("profile-pushes").textContent = rec.pushes;
 
-  // Reset password from profile — pre-fill email
   const resetEmailEl = document.getElementById("reset-email");
   if (resetEmailEl) resetEmailEl.value = user.email || "";
 
@@ -255,7 +399,6 @@ async function openSettingsModal() {
       const el = document.getElementById(`key-${k}`);
       if (el) el.value = v;
     }
-    // Load default sport preference
     const prefSport = state.userDoc?.prefs?.defaultSport || state.activeSport;
     const sel = document.getElementById("pref-sport");
     if (sel) sel.value = prefSport;
@@ -278,7 +421,6 @@ async function saveSettings() {
   const user = getCurrentUser();
   if (user) {
     await saveUserKeys(user.uid, keys);
-    // Save default sport preference
     const prefSport = document.getElementById("pref-sport")?.value;
     if (prefSport && CONFIG.sports[prefSport]) {
       const { updateUserDoc } = await import("./firebase.js");
@@ -288,18 +430,18 @@ async function saveSettings() {
   }
   closeModal("modal-settings");
   toast("Settings saved");
+  // Invalidate cache so new keys take effect
+  Object.keys(_sportCache).forEach(k => delete _sportCache[k]);
   await loadSport(state.activeSport, state.activeDate);
 }
 
 // ─── Modal wiring ─────────────────────────────────────────────────────────────
 function setupModals() {
-  // Overlay click to close
   document.querySelectorAll(".modal-overlay").forEach(o =>
     o.addEventListener("click", e => { if (e.target === o) closeAllModals(); })
   );
   document.querySelectorAll(".modal-close").forEach(b => b.addEventListener("click", closeAllModals));
 
-  // Settings tabs
   document.querySelectorAll(".settings-tab").forEach(tab => {
     tab.addEventListener("click", () => {
       document.querySelectorAll(".settings-tab").forEach(t => t.classList.remove("active"));
@@ -311,20 +453,16 @@ function setupModals() {
 
   document.getElementById("btn-save-settings")?.addEventListener("click", saveSettings);
 
-  // Google auth
   document.getElementById("btn-google-login")?.addEventListener("click",    handleGoogleLogin);
   document.getElementById("btn-google-register")?.addEventListener("click", handleGoogleLogin);
 
-  // Email login
   document.getElementById("auth-login-btn")?.addEventListener("click", async () => {
     try {
       await loginEmail(document.getElementById("login-email")?.value, document.getElementById("login-password")?.value);
-      closeModal("modal-auth");
-      toast("Welcome back!");
+      closeModal("modal-auth"); toast("Welcome back!");
     } catch (e) { showAuthError(e.message); }
   });
 
-  // Email register
   document.getElementById("auth-register-btn")?.addEventListener("click", async () => {
     try {
       await registerEmail(
@@ -332,14 +470,11 @@ function setupModals() {
         document.getElementById("register-password")?.value,
         document.getElementById("register-name")?.value
       );
-      closeModal("modal-auth");
-      toast("Account created! Welcome to -110");
+      closeModal("modal-auth"); toast("Account created! Welcome to -110");
     } catch (e) { showAuthError(e.message); }
   });
 
-  // ── Password reset from login page ──
   document.getElementById("link-forgot-password")?.addEventListener("click", () => {
-    // Pre-fill reset email from login field if available
     const loginEmail = document.getElementById("login-email")?.value;
     const resetEl    = document.getElementById("reset-email");
     if (resetEl && loginEmail) resetEl.value = loginEmail;
@@ -355,7 +490,6 @@ function setupModals() {
     } catch (e) { showAuthError(e.message); }
   });
 
-  // ── Password reset from profile (already signed in) ──
   document.getElementById("btn-profile-reset-password")?.addEventListener("click", async () => {
     const user = getCurrentUser();
     if (!user?.email) return;
@@ -365,12 +499,10 @@ function setupModals() {
     } catch (e) { toast(e.message, "error"); }
   });
 
-  // Auth tab switches
   document.getElementById("link-to-register")?.addEventListener("click", () => showAuthTab("register"));
   document.getElementById("link-to-login")?.addEventListener("click",    () => showAuthTab("login"));
   document.getElementById("link-back-to-login")?.addEventListener("click", () => showAuthTab("login"));
 
-  // Logout
   document.getElementById("btn-logout")?.addEventListener("click", async () => {
     await logout();
     closeModal("modal-profile");
@@ -379,7 +511,6 @@ function setupModals() {
     renderGuestUI();
   });
 
-  // Key visibility toggles
   document.querySelectorAll(".key-toggle").forEach(btn => {
     btn.addEventListener("click", () => {
       const input = btn.previousElementSibling;
@@ -389,7 +520,11 @@ function setupModals() {
     });
   });
 
-  document.getElementById("btn-refresh")?.addEventListener("click", () => loadSport(state.activeSport, state.activeDate));
+  document.getElementById("btn-refresh")?.addEventListener("click", () => {
+    // Force-clear cache for active sport then reload
+    delete _sportCache[state.activeSport];
+    loadSport(state.activeSport, state.activeDate);
+  });
 }
 
 window.openModal      = openModal;

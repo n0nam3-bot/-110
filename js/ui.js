@@ -129,6 +129,8 @@ export function renderGameCard(game, pickResult, savedIds = []) {
           ${game.live
             ? `<span class="game-status-live">LIVE</span>`
             : `<span class="game-time">${formatGameTime(game.date)}</span>`}
+          ${game.promotion ? `<span class="mma-promotion-badge">${game.promotion}</span>` : ""}
+          ${game.eventName && game.sport === "mma" ? `<span style="font-size:.60rem;color:var(--text3);display:block;max-width:90px;text-align:right;line-height:1.2">${game.eventName}</span>` : ""}
           ${game.broadcast ? `<span style="font-size:.62rem;color:var(--text3)">${game.broadcast}</span>` : ""}
         </div>
       </div>

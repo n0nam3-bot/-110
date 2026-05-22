@@ -15,12 +15,22 @@ async function fetchJSON(url, opts = {}) {
   }
 }
 
-// ─── ESPN ────────────────────────────────────────────────────────────────────
-// MMA/UFC on ESPN uses a different scoreboard path — no league segment
-// Standard:  /sports/{sport}/{league}/scoreboard
-// MMA:       /sports/mma/scoreboard  (league = "ufc" is NOT a valid path segment)
-// We also try the leagueSchedule endpoint as fallback for future UFC events
+// ─── MMA Promotion helper ────────────────────────────────────────────────────
+function extractMMAPromotion(name) {
+  if (!name) return "MMA";
+  const n = name.toLowerCase();
+  if (n.includes("ufc"))                             return "UFC";
+  if (n.includes("pfl"))                             return "PFL";
+  if (n.includes("bellator"))                        return "Bellator";
+  if (n.includes("one championship") || n.includes("one fc")) return "ONE";
+  if (n.includes("rizin"))                           return "RIZIN";
+  if (n.includes("bkfc"))                            return "BKFC";
+  if (n.includes("glory"))                           return "Glory";
+  if (n.includes("mvp"))                             return "MVP";
+  return "MMA";
+}
 
+// ─── ESPN ────────────────────────────────────────────────────────────────────
 export async function getESPNGames(sportKey, date = null) {
   const s  = CONFIG.sports[sportKey];
   if (!s) return [];
@@ -31,12 +41,10 @@ export async function getESPNGames(sportKey, date = null) {
   let data = null;
 
   if (sportKey === "mma") {
-    // ESPN MMA scoreboard — no league in path, date filter applied differently
     const base = `https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard`;
     const url  = date ? `${base}?dates=${date}` : base;
     data = await fetchJSON(url);
 
-    // If no events on scoreboard, try the schedule endpoint for upcoming cards
     if (!data?.events?.length) {
       const sched = await fetchJSON(
         `https://site.api.espn.com/apis/site/v2/sports/mma/ufc/schedule${date ? `?dates=${date}` : ""}`
@@ -50,56 +58,111 @@ export async function getESPNGames(sportKey, date = null) {
 
   if (!data?.events) return [];
 
-  const games = data.events.map(ev => {
-    const comp   = ev.competitions?.[0];
-    const home   = comp?.competitors?.find(c => c.homeAway === "home");
-    const away   = comp?.competitors?.find(c => c.homeAway === "away");
-    const status = ev.status?.type;
-    const state  = status?.state; // "pre" | "in" | "post"
+  const games = [];
 
-    // MMA: fighters listed as competitors without homeAway distinction — treat first as "away" (challenger)
-    const fighterA = comp?.competitors?.[0];
-    const fighterB = comp?.competitors?.[1];
-
+  for (const ev of data.events) {
     const isMMA = sportKey === "mma";
 
-    return {
-      id:        ev.id,
-      sport:     sportKey,
-      name:      ev.name,
-      shortName: ev.shortName,
-      date:      ev.date,
-      status:    status?.name || "scheduled",
-      completed: status?.completed || false,
-      live:      state === "in",
-      pre:       state === "pre",
-      homeTeam: isMMA ? {
-        id:   fighterB?.id,
-        name: fighterB?.athlete?.displayName || fighterB?.team?.displayName || "Fighter B",
-        abbr: fighterB?.athlete?.lastName    || "B",
-        logo: fighterB?.athlete?.headshot?.href || fighterB?.team?.logo,
-        record: fighterB?.records?.[0]?.summary
-      } : {
-        id: home?.id, name: home?.team?.displayName, abbr: home?.team?.abbreviation,
-        logo: home?.team?.logo, score: home?.score, record: home?.records?.[0]?.summary
-      },
-      awayTeam: isMMA ? {
-        id:   fighterA?.id,
-        name: fighterA?.athlete?.displayName || fighterA?.team?.displayName || "Fighter A",
-        abbr: fighterA?.athlete?.lastName    || "A",
-        logo: fighterA?.athlete?.headshot?.href || fighterA?.team?.logo,
-        record: fighterA?.records?.[0]?.summary
-      } : {
-        id: away?.id, name: away?.team?.displayName, abbr: away?.team?.abbreviation,
-        logo: away?.team?.logo, score: away?.score, record: away?.records?.[0]?.summary
-      },
-      venue:     comp?.venue?.fullName,
-      broadcast: comp?.broadcasts?.[0]?.names?.join(", "),
-    };
-  });
+    if (isMMA) {
+      // ── Explode every competition (fight) in the event into its own entry ──
+      const promotion = extractMMAPromotion(ev.name);
+      const comps = ev.competitions || [];
+
+      for (const comp of comps) {
+        const fighterA = comp?.competitors?.[0];
+        const fighterB = comp?.competitors?.[1];
+        // Use competition-level status if present, fall back to event status
+        const compStatus = comp?.status?.type;
+        const evStatus   = ev.status?.type;
+        const statusType = compStatus || evStatus;
+        const state      = statusType?.state;
+
+        games.push({
+          id:        comp?.id || `${ev.id}_${games.length}`,
+          sport:     sportKey,
+          promotion,                      // "UFC", "PFL", etc.
+          eventName: ev.name,             // Full card name e.g. "UFC 315: …"
+          name:      comp?.name || ev.name,
+          shortName: comp?.shortName || ev.shortName,
+          date:      ev.date,             // Use parent event date so all fights share the same calendar day
+          status:    statusType?.name || "Scheduled",
+          completed: compStatus?.completed || evStatus?.completed || false,
+          live:      state === "in",
+          pre:       state === "pre",
+          homeTeam: {
+            id:     fighterB?.id,
+            name:   fighterB?.athlete?.displayName || fighterB?.team?.displayName || "Fighter B",
+            abbr:   fighterB?.athlete?.lastName    || "B",
+            logo:   fighterB?.athlete?.headshot?.href || fighterB?.team?.logo,
+            record: fighterB?.records?.[0]?.summary
+          },
+          awayTeam: {
+            id:     fighterA?.id,
+            name:   fighterA?.athlete?.displayName || fighterA?.team?.displayName || "Fighter A",
+            abbr:   fighterA?.athlete?.lastName    || "A",
+            logo:   fighterA?.athlete?.headshot?.href || fighterA?.team?.logo,
+            record: fighterA?.records?.[0]?.summary
+          },
+          venue:     comp?.venue?.fullName || ev.competitions?.[0]?.venue?.fullName,
+          broadcast: comp?.broadcasts?.[0]?.names?.join(", ") || ev.competitions?.[0]?.broadcasts?.[0]?.names?.join(", "),
+        });
+      }
+
+    } else {
+      // ── Standard team sports ──
+      const comp   = ev.competitions?.[0];
+      const home   = comp?.competitors?.find(c => c.homeAway === "home");
+      const away   = comp?.competitors?.find(c => c.homeAway === "away");
+      const status = ev.status?.type;
+      const state  = status?.state;
+
+      games.push({
+        id:        ev.id,
+        sport:     sportKey,
+        name:      ev.name,
+        shortName: ev.shortName,
+        date:      ev.date,
+        status:    status?.name || "scheduled",
+        completed: status?.completed || false,
+        live:      state === "in",
+        pre:       state === "pre",
+        homeTeam: {
+          id: home?.id, name: home?.team?.displayName, abbr: home?.team?.abbreviation,
+          logo: home?.team?.logo, score: home?.score, record: home?.records?.[0]?.summary
+        },
+        awayTeam: {
+          id: away?.id, name: away?.team?.displayName, abbr: away?.team?.abbreviation,
+          logo: away?.team?.logo, score: away?.score, record: away?.records?.[0]?.summary
+        },
+        venue:     comp?.venue?.fullName,
+        broadcast: comp?.broadcasts?.[0]?.names?.join(", "),
+      });
+    }
+  }
 
   // Pre-game only — live games skew odds against bettors
-  const pregame = games.filter(g => !g.completed && !g.live);
+  let pregame = games.filter(g => !g.completed && !g.live);
+
+  // ── Strict date validation ────────────────────────────────────────────────
+  // ESPN sometimes returns "next available" games even when the queried date
+  // has none (e.g. NFL in the off-season).  Filter to only events whose
+  // local-timezone date matches what the user actually selected.
+  if (date && pregame.length) {
+    const targetDate = `${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}`;
+    const validated = pregame.filter(g => {
+      if (!g.date) return false;
+      const d = new Date(g.date);
+      // Use the browser's local timezone so a 10 PM ET game (= next-day UTC)
+      // still counts as today locally.
+      const localDate =
+        `${d.getFullYear()}-` +
+        `${String(d.getMonth() + 1).padStart(2, "0")}-` +
+        `${String(d.getDate()).padStart(2, "0")}`;
+      return localDate === targetDate;
+    });
+    pregame = validated;
+  }
+
   memSet(ck, pregame, CONFIG.cache.espn);
   return pregame;
 }
@@ -235,7 +298,6 @@ export function mergeOddsIntoGames(games, oddsData) {
       return oh.includes(g.homeTeam.abbr?.toLowerCase() || "___") ||
              oh.includes(homeName.split(" ").pop() || "___") ||
              oa.includes(awayName.split(" ").pop() || "___") ||
-             // MMA: match fighter last names
              oh.includes(homeName.split(" ").slice(-1)[0] || "___") ||
              oa.includes(awayName.split(" ").slice(-1)[0] || "___");
     });
