@@ -2,7 +2,7 @@ import { initFirebase, onUserChange, ensureUserDoc, getCurrentUser,
          loginGoogle, loginEmail, registerEmail, logout,
          getUserDoc, saveUserKeys, getUserKeys, syncUserKeysToLocalStorage,
          savePick, unsavePick, sendPasswordReset } from "./firebase.js";
-import { loadGamesForSport, getPicksForGame } from "./picks.js";
+import { loadGamesForSport, getPicksForSport } from "./picks.js";
 import { hasKeys } from "./ai.js";
 import { renderGameCard, renderBestBetsSidebar, renderSavedSidebar,
          renderSummaryBar, attachSaveHandlers, attachToggleHandlers,
@@ -87,11 +87,13 @@ function setupDateSelector() {
   input.addEventListener("change", () => {
     // Changing the date invalidates the entire cache
     Object.keys(_sportCache).forEach(k => delete _sportCache[k]);
+    Object.keys(localStorage).filter(k => k.startsWith("_110_picks_")).forEach(k => localStorage.removeItem(k));
     state.activeDate = input.value ? input.value.replace(/-/g, "") : null;
     loadSport(state.activeSport, state.activeDate);
   });
   document.getElementById("btn-today")?.addEventListener("click", () => {
     Object.keys(_sportCache).forEach(k => delete _sportCache[k]);
+    Object.keys(localStorage).filter(k => k.startsWith("_110_picks_")).forEach(k => localStorage.removeItem(k));
     input.value = new Date().toISOString().split("T")[0];
     state.activeDate = null;
     loadSport(state.activeSport, null);
@@ -200,107 +202,120 @@ async function loadSport(sportKey, date = null) {
   _preloadOtherSports(date);
 }
 
+// ─── localStorage persistence (survives page refresh / mobile reload) ───────────
+const _LS_PREFIX = "_110_picks_";
+const _LS_TTL    = 30 * 60 * 1000; // 30 min — matches auto-refresh interval
+
+function _lsKey(sportKey, date) { return `${_LS_PREFIX}${sportKey}_${date || "today"}`; }
+
+function _lsGet(sportKey, date) {
+  try {
+    const raw = localStorage.getItem(_lsKey(sportKey, date));
+    if (!raw) return null;
+    const entry = JSON.parse(raw);
+    if (!entry?.loadedAt || (Date.now() - entry.loadedAt) > _LS_TTL) return null;
+    return entry; // { games, pickData, loadedAt }
+  } catch { return null; }
+}
+
+function _lsSet(sportKey, date, games, pickData) {
+  try {
+    localStorage.setItem(_lsKey(sportKey, date), JSON.stringify({ games, pickData, loadedAt: Date.now() }));
+  } catch {
+    // Quota exceeded — evict all old picks cache entries and retry once
+    Object.keys(localStorage).filter(k => k.startsWith(_LS_PREFIX)).forEach(k => localStorage.removeItem(k));
+    try { localStorage.setItem(_lsKey(sportKey, date), JSON.stringify({ games, pickData, loadedAt: Date.now() })); } catch {}
+  }
+}
+
+// ─── Progress bar helpers ─────────────────────────────────────────────────────
+function _showProgress(sportKey, msg, pct) {
+  if (sportKey !== state.activeSport) return;
+  let bar = document.getElementById("analysis-progress");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "analysis-progress";
+    bar.className = "analysis-progress";
+    const gl = document.getElementById("games-list");
+    gl?.parentNode?.insertBefore(bar, gl);
+  }
+  bar.innerHTML = `
+    <div class="ap-track"><div class="ap-fill" style="width:${Math.round(pct * 100)}%"></div></div>
+    <span class="ap-label">${msg}</span>`;
+}
+
+function _clearProgress(sportKey) {
+  if (sportKey !== state.activeSport) return;
+  document.getElementById("analysis-progress")?.remove();
+}
+
+// ─── Core fetch + batch-analyze ───────────────────────────────────────────────
 async function _fetchAndAnalyze(sportKey, date) {
   try {
-    const games    = await loadGamesForSport(sportKey, date);
-    const upcoming = games.slice(0, 12);
+    // ── 1. localStorage hit (instant render, zero API calls) ──
+    const lsCached = _lsGet(sportKey, date);
+    if (lsCached) {
+      _sportCache[sportKey] = { ...lsCached };
+      return; // renderFromCache() called by caller
+    }
 
-    // Initialise cache slot so partial renders work while analysis runs
+    // ── 2. Fetch schedules + odds (fast, no LLM) ──
+    _showProgress(sportKey, "Fetching schedules & odds…", 0.08);
+    const games    = await loadGamesForSport(sportKey, date);
+    const upcoming = games.slice(0, 8); // cap matches picks.js batch limit
+
     _sportCache[sportKey] = { games, pickData: [], loadedAt: null };
 
-    // Render initial cards (no picks yet) if this is the visible sport
+    if (!upcoming.length) {
+      _sportCache[sportKey].loadedAt = Date.now();
+      _clearProgress(sportKey);
+      return;
+    }
+
+    // Show game cards immediately (no picks yet) so the UI isn't blank
     if (sportKey === state.activeSport) {
       const container = document.getElementById("games-list");
-      if (!upcoming.length) {
-        renderFromCache(sportKey); // empty-state render
-        _sportCache[sportKey].loadedAt = Date.now();
-        return;
-      }
       container.innerHTML = upcoming.map(g => renderGameCard(g, null, state.savedIds)).join("");
       attachToggleHandlers();
     }
 
-    // Analyse each game, streaming results into the UI.
-    // Games are processed one at a time with a small delay between each to
-    // stay under free-tier rate limits (Gemini: ~15 req/min, Groq: ~30 req/min).
-    for (let gi = 0; gi < upcoming.length; gi++) {
-      const game = upcoming[gi];
+    // ── 3. Single batch LLM call for ALL games ──
+    const pickData = await getPicksForSport(upcoming, (msg, pct) => {
+      _showProgress(sportKey, msg, 0.15 + pct * 0.82); // map 0→1 into 15%→97%
+    });
 
-      // Pace requests: skip delay on first game, then wait 5 s between games.
-      // This keeps us at ~12 req/min on a 12-game card, well under all free limits.
-      if (gi > 0) await new Promise(r => setTimeout(r, 5000));
-
-      // If the user switched to a different sport while we were loading this one,
-      // keep filling the cache silently but stop touching the DOM.
-      const isVisible = sportKey === state.activeSport;
-
-      try {
-        const pickResult = await getPicksForGame(game);
-        _sportCache[sportKey].pickData.push(pickResult);
-
-        if (isVisible) {
-          const card = document.getElementById(`card-${game.id}`);
-          if (card) card.outerHTML = renderGameCard(game, pickResult, state.savedIds);
-          attachToggleHandlers();
-          attachSaveHandlers(_sportCache[sportKey].pickData, state.savedIds, onSaveChange);
-          renderBestBetsSidebar(_sportCache[sportKey].pickData);
-          renderSummaryBar(upcoming, _sportCache[sportKey].pickData);
-        }
-      } catch (e) {
-        console.warn(`Game ${game.id}:`, e.message);
-        if (isVisible) {
-          const card = document.getElementById(`card-${game.id}`);
-          if (card) card.outerHTML = renderGameCard(game, { error: e.message, allPicks:[], bestBet:null }, state.savedIds);
-        }
-      }
-    }
-
+    _sportCache[sportKey].pickData = pickData;
     _sportCache[sportKey].loadedAt = Date.now();
 
+    // ── 4. Persist to localStorage (survives mobile page refresh) ──
+    _lsSet(sportKey, date, games, pickData);
+
+    // ── 5. Render all results at once ──
     if (sportKey === state.activeSport) {
       state.games    = games;
-      state.pickData = _sportCache[sportKey].pickData;
+      state.pickData = pickData;
     }
+
+    _clearProgress(sportKey);
+    // NOTE: Background preloading of other sports is intentionally disabled.
+    // The LLM serializer queue means any concurrent background load would block
+    // the user's active sport from getting its analysis call through.
+    // Sports load on demand; localStorage cache makes repeat visits instant.
 
   } catch (e) {
+    _clearProgress(sportKey);
     if (sportKey === state.activeSport) {
       document.getElementById("games-list").innerHTML =
-        `<div class="empty-state"><div class="icon">⚠</div><div class="title">Failed to load</div><div class="desc">${e.message}</div></div>`;
+        `<div class="empty-state"><div class="icon">⚠</div><div class="title">Analysis failed</div><div class="desc">${e.message}</div></div>`;
     }
   }
 }
 
-/** Silently pre-populate the cache for sports the user hasn't visited yet.
- *  Deliberately conservative: waits 20 s after active sport finishes,
- *  then loads one sport at a time with a 30 s gap between each — this
- *  avoids flooding Groq/Gemini/OpenRouter with simultaneous requests.
+/** Background preloading is disabled — the LLM serializer queue means concurrent
+ *  loads would block the active sport's analysis call from getting through.
+ *  Sports are loaded on demand; localStorage (30-min TTL) makes repeat visits instant.
  */
-function _preloadOtherSports(date) {
-  const others = Object.keys(CONFIG.sports).filter(sk => sk !== state.activeSport);
-  // Sequential queue: each waits for the previous to finish
-  let chain = Promise.resolve();
-  let delay = 20000; // start 20 s after active sport completes
-  for (const sk of others) {
-    ((sport, initialDelay) => {
-      setTimeout(() => {
-        // Only proceed if: tab is visible, not already cached/loading, and user hasn't switched date
-        if (document.visibilityState !== "visible") return;
-        if (_sportCache[sport] || _sportLoading[sport]) return;
-        chain = chain.then(async () => {
-          if (_sportCache[sport] || _sportLoading[sport]) return;
-          if (document.visibilityState !== "visible") return;
-          const p = _fetchAndAnalyze(sport, date);
-          _sportLoading[sport] = p;
-          p.finally(() => { delete _sportLoading[sport]; });
-          await p;
-          // 15 s pause between sports to avoid rate limits
-          await new Promise(r => setTimeout(r, 15000));
-        });
-      }, initialDelay);
-    })(sk, delay);
-    delay += 5000; // stagger start times so they don't all fire at once
-  }
-}
+function _preloadOtherSports(_date) { /* intentionally empty */ }
 
 // ─── 30-minute auto-refresh (only while tab is visible) ──────────────────────
 function startAutoRefresh() {
@@ -458,8 +473,9 @@ async function saveSettings() {
   }
   closeModal("modal-settings");
   toast("Settings saved");
-  // Invalidate cache so new keys take effect
+  // Invalidate both in-memory and localStorage caches so new keys take effect
   Object.keys(_sportCache).forEach(k => delete _sportCache[k]);
+  Object.keys(localStorage).filter(k => k.startsWith("_110_picks_")).forEach(k => localStorage.removeItem(k));
   await loadSport(state.activeSport, state.activeDate);
 }
 
