@@ -43,42 +43,42 @@ export function formatGameTime(dateStr) {
 
 export function teamLogoHtml(team) {
   if (team?.logo) return `<img class="team-logo" src="${team.logo}" alt="${team.abbr}" onerror="this.outerHTML='<div class=team-logo-placeholder>${team.abbr||"?"}</div>'">`;
-  return `<div class="team-logo-placeholder">${team?.abbr?.slice(0,3) || "?"}</div>`;
+  return `<div class="team-logo-placeholder">${team?.abbr || "?"}</div>`;
 }
 
 function oddsStripHtml(game) {
   const o = game.odds;
-  if (!o) return `<div class="odds-strip"><div class="odds-cell" style="flex:1;text-align:center"><span class="odds-label">Add Odds-API key in Settings for live lines</span></div></div>`;
-  const isMMA = game.sport === "mma";
+  if (!o) return `<div class="odds-strip"><div class="odds-cell" style="width:100%;text-align:center"><span class="odds-label">Add Odds-API key in Settings for live lines</span></div></div>`;
   return `
     <div class="odds-strip">
-      ${!isMMA ? `<div class="odds-cell">
+      <div class="odds-cell">
         <div class="odds-label">Spread</div>
         <div class="odds-val">${o.spread?.home?.point > 0 ? "+" : ""}${o.spread?.home?.point ?? "N/A"}</div>
         <div class="odds-sub">${formatOdds(o.spread?.home?.price)}</div>
-      </div>` : ""}
-      ${!isMMA ? `<div class="odds-cell">
+      </div>
+      <div class="odds-cell">
         <div class="odds-label">Total</div>
         <div class="odds-val">${o.total?.over?.point ?? "N/A"}</div>
         <div class="odds-sub">O ${formatOdds(o.total?.over?.price)}</div>
-      </div>` : ""}
+      </div>
       <div class="odds-cell">
-        <div class="odds-label">${isMMA ? game.homeTeam.abbr : game.homeTeam.abbr} ML</div>
+        <div class="odds-label">${game.homeTeam.abbr} ML</div>
         <div class="odds-val">${formatOdds(o.moneyline?.home?.price)}</div>
       </div>
       <div class="odds-cell">
-        <div class="odds-label">${isMMA ? game.awayTeam.abbr : game.awayTeam.abbr} ML</div>
+        <div class="odds-label">${game.awayTeam.abbr} ML</div>
         <div class="odds-val">${formatOdds(o.moneyline?.away?.price)}</div>
       </div>
     </div>`;
 }
 
 export function pickRowHtml(pick, savedIds = [], isBestBet = false) {
-  const gc        = gradeColor(pick.grade);
-  const isSaved   = savedIds.includes(pick.id);
+  const gc      = gradeColor(pick.grade);
+  const isSaved = savedIds.includes(pick.id);
   const typeLabel = pick.type === "prop"
     ? (pick.marketLabel || "Prop")
     : (pick.type?.replace(/_/g," ") || "Pick").toUpperCase();
+
   return `
     <div class="pick-row ${isBestBet ? "pick-row-best" : ""}" data-pick-id="${pick.id}">
       <div class="pick-grade" style="background:${gc};color:#0a0a0a">${pick.grade}</div>
@@ -98,39 +98,30 @@ export function pickRowHtml(pick, savedIds = [], isBestBet = false) {
 }
 
 export function renderGameCard(game, pickResult, savedIds = []) {
-  const hasBestBet  = !!pickResult?.bestBet;
-  const allPicks    = pickResult?.allPicks || [];
-  const analyzing   = !pickResult;
-  const hasError    = pickResult?.error;
-  const bestBetId   = pickResult?.bestBet?.id;
-  const isMMA       = game.sport === "mma";
+  const hasBestBet = !!pickResult?.bestBet;
+  const allPicks   = pickResult?.allPicks || [];
+  const analyzing  = !pickResult;
+  const hasError   = pickResult?.error;
+  const bestBetId  = pickResult?.bestBet?.id;
 
+  // Sort picks: S first, then A, then B, then C
   const gradeOrder = { S:0, A:1, B:2, C:3 };
   const sortedPicks = [...allPicks].sort((a,b) => (gradeOrder[a.grade]??9) - (gradeOrder[b.grade]??9));
-
-  // Promotion badge for MMA
-  const promotionBadge = isMMA && game.promotion
-    ? `<span class="promotion-badge">${game.promotion}</span>` : "";
 
   return `
     <div class="game-card ${hasBestBet ? "has-best-bet" : ""}" id="card-${game.id}">
       <div class="game-card-header">
         <div class="game-teams">
-          ${promotionBadge}
           <div class="teams-col">
             <div class="team-row">
               ${teamLogoHtml(game.awayTeam)}
-              <div>
-                <span class="team-name">${game.awayTeam.name}</span>
-                ${game.awayTeam.record ? `<span class="team-record">${game.awayTeam.record}</span>` : ""}
-              </div>
+              <span class="team-name">${game.awayTeam.name}</span>
+              <span class="team-record">${game.awayTeam.record || ""}</span>
             </div>
             <div class="team-row">
               ${teamLogoHtml(game.homeTeam)}
-              <div>
-                <span class="team-name">${game.homeTeam.name}</span>
-                ${game.homeTeam.record ? `<span class="team-record">${game.homeTeam.record}</span>` : ""}
-              </div>
+              <span class="team-name">${game.homeTeam.name}</span>
+              <span class="team-record">${game.homeTeam.record || ""}</span>
             </div>
           </div>
         </div>
@@ -138,8 +129,9 @@ export function renderGameCard(game, pickResult, savedIds = []) {
           ${game.live
             ? `<span class="game-status-live">LIVE</span>`
             : `<span class="game-time">${formatGameTime(game.date)}</span>`}
+          ${game.promotion ? `<span class="mma-promotion-badge">${game.promotion}</span>` : ""}
+          ${game.eventName && game.sport === "mma" ? `<span style="font-size:.60rem;color:var(--text3);display:block;max-width:90px;text-align:right;line-height:1.2">${game.eventName}</span>` : ""}
           ${game.broadcast ? `<span style="font-size:.62rem;color:var(--text3)">${game.broadcast}</span>` : ""}
-          ${game.venue ? `<span style="font-size:.6rem;color:var(--text3)">${game.venue}</span>` : ""}
         </div>
       </div>
 
@@ -164,12 +156,14 @@ export function renderGameCard(game, pickResult, savedIds = []) {
                 <div class="best-bet-reasoning">${pickResult.bestBet.reasoning || ""}</div>
               </div>
             </div>` : ""}
-          <div class="all-picks-header">All Picks (${sortedPicks.length})</div>
+          <div class="all-picks-header">
+            <span>All Picks (${sortedPicks.length})</span>
+          </div>
           <div class="picks-list">
             ${sortedPicks.map(p => pickRowHtml(p, savedIds, p.id === bestBetId)).join("")}
           </div>
         ` : `
-          <div class="no-value-row">No qualifying picks — no clear edge detected for this ${isMMA ? "fight" : "game"}.</div>
+          <div class="no-value-row">No qualifying picks found for this game — no edge detected.</div>
         `}
       </div>
 
@@ -190,6 +184,7 @@ export function attachSaveHandlers(allPickData, savedIds, onSaveChange) {
       const pickId = btn.dataset.pickId;
       const user   = getCurrentUser();
       if (!user) { toast("Sign in to save picks", "error"); return; }
+
       let foundPick = null;
       for (const pd of allPickData) {
         const match = (pd.allPicks || []).find(p => p.id === pickId);
@@ -197,13 +192,18 @@ export function attachSaveHandlers(allPickData, savedIds, onSaveChange) {
         if (pd.bestBet?.id === pickId) { foundPick = { ...pd.bestBet, gameId: pd.gameId, gameLabel: pd.game?.shortName }; break; }
       }
       if (!foundPick) return;
+
       const isSaved = savedIds.includes(pickId);
       if (isSaved) {
-        await unsavePick(user.uid, pickId); savedIds.splice(savedIds.indexOf(pickId), 1);
-        btn.textContent = "☆"; btn.classList.remove("saved"); toast("Pick removed");
+        await unsavePick(user.uid, pickId);
+        savedIds.splice(savedIds.indexOf(pickId), 1);
+        btn.textContent = "☆"; btn.classList.remove("saved");
+        toast("Pick removed");
       } else {
-        await savePick(user.uid, foundPick); savedIds.push(pickId);
-        btn.textContent = "★"; btn.classList.add("saved"); toast("Pick saved ★");
+        await savePick(user.uid, foundPick);
+        savedIds.push(pickId);
+        btn.textContent = "★"; btn.classList.add("saved");
+        toast("Pick saved ★");
       }
       onSaveChange?.();
     });
@@ -256,6 +256,9 @@ export function renderSavedSidebar(savedPicks) {
     <div class="bb-item">
       <div class="bb-game">${p.gameLabel || "Game"}</div>
       <div class="bb-selection">${p.selection}</div>
-      <div class="bb-meta"><span class="bb-odds">${formatOdds(p.odds)}</span>${gradeBadge(p.grade)}</div>
+      <div class="bb-meta">
+        <span class="bb-odds">${formatOdds(p.odds)}</span>
+        ${gradeBadge(p.grade)}
+      </div>
     </div>`).join("");
 }
