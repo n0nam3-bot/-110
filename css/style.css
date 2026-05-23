@@ -899,3 +899,32 @@ button { cursor: pointer; font-family: inherit; border: none; }
   color: #0a0a0a;
   margin-bottom: 2px;
 }
+
+/* ── Analysis progress bar ───────────────────────────────────────────────── */
+.analysis-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 16px;
+  background: var(--card, #141414);
+  border: 1px solid var(--border, #222);
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+.ap-track {
+  height: 4px;
+  background: rgba(255,255,255,.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.ap-fill {
+  height: 100%;
+  background: var(--accent, #b5f23d);
+  border-radius: 2px;
+  transition: width .4s ease;
+}
+.ap-label {
+  font-size: .72rem;
+  color: var(--text2, #888);
+  letter-spacing: .02em;
+}
