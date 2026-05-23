@@ -3,17 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <meta http-equiv="Pragma" content="no-cache">
-  <meta http-equiv="Expires" content="0">
   <title>-110 | Sharp Sports Picks</title>
   <meta name="description" content="-110: AI-powered sports picks, best bets, and player props. Free. Sharp. Daily.">
   <meta name="theme-color" content="#0a0a0a">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <meta property="og:title" content="-110 | Sharp Sports Picks">
   <meta property="og:description" content="AI-powered best bets, props, and analysis. Free forever.">
   <meta property="og:type" content="website">
   <!-- System font stack used — no external font dependency -->
-  <link rel="stylesheet" href="css/style.css?v=1.0.5">
+  <link rel="stylesheet" href="css/style.css?v=1.0.4">
 </head>
 <body>
 
@@ -150,24 +150,7 @@
           <input class="form-input" type="password" id="login-password" placeholder="••••••••">
         </div>
         <button class="form-btn form-btn-primary" id="auth-login-btn">Sign In</button>
-        <div class="form-switch" style="display:flex;justify-content:space-between">
-          <span>No account? <a id="link-to-register">Create one free</a></span>
-          <a id="link-forgot-password" style="color:var(--text2)">Forgot password?</a>
-        </div>
-      </div>
-
-      <!-- Password reset -->
-      <div id="auth-reset-form" style="display:none">
-        <div style="margin-bottom:16px">
-          <div style="font-weight:700;margin-bottom:4px">Reset Password</div>
-          <div style="font-size:.78rem;color:var(--text2)">We'll send a reset link to your email.</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Email</label>
-          <input class="form-input" type="email" id="reset-email" placeholder="you@example.com">
-        </div>
-        <button class="form-btn form-btn-primary" id="auth-reset-btn">Send Reset Link</button>
-        <div class="form-switch"><a id="link-back-to-login">← Back to Sign In</a></div>
+        <div class="form-switch">No account? <a id="link-to-register">Create one free</a></div>
       </div>
 
       <!-- Register -->
@@ -179,7 +162,7 @@
         <div class="form-divider">or</div>
         <div class="form-group">
           <label class="form-label">Display Name</label>
-          <input class="form-input" type="text" id="register-name" placeholder="Bettor Name">
+          <input class="form-input" type="text" id="register-name" placeholder="Your Name">
         </div>
         <div class="form-group">
           <label class="form-label">Email</label>
@@ -287,7 +270,7 @@
           AI: Gemini 1.5 Flash · Groq Llama 3.3 · OpenRouter<br><br>
           Picks are for informational purposes only. Bet responsibly.
         </p>
-        <div style="margin-top:16px;font-size:.72rem;color:var(--text3)">v1.0.0 · github.com/n0nam3-bot/-110</div>
+        <div style="margin-top:16px;font-size:.72rem;color:var(--text3)">v1.0.4 · github.com/n0nam3-bot/-110</div>
       </div>
     </div>
     <div class="modal-footer">
@@ -337,7 +320,7 @@
     <div class="modal-footer" style="justify-content:space-between">
       <div style="display:flex;gap:8px">
         <button class="nav-btn" id="btn-logout">Sign Out</button>
-        <button class="nav-btn" id="btn-profile-reset-password">🔑 Reset Password</button>
+        <button class="nav-btn" id="btn-profile-reset-password" title="Send password reset email">🔑 Reset Password</button>
       </div>
       <button class="nav-btn primary" onclick="closeAllModals()">Close</button>
     </div>
@@ -345,11 +328,8 @@
 </div>
 
 <!-- ─── Scripts ─── -->
-<script src="js/config.js?v=1.0.5"></script>
-<script type="module">
-  // Cache-busted import — forces re-download when version bumps
-  import("./js/app.js?v=1.0.5").catch(e => console.error("App load failed:", e));
-</script>
+<script src="js/config.js?v=1.0.4"></script>
+<script type="module" src="js/app.js?v=1.0.4"></script>
 <script>
   // Set today's date
   document.getElementById("today-date").textContent =
