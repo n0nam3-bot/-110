@@ -1,4 +1,4 @@
-import { analyzeGame, analyzeProps, analyzeBatchGames, analyzeBatchProps } from "./ai.js";
+import { analyzeGame, analyzeProps, analyzeCombinedBatch } from "./ai.js";
 import { getESPNGames, getTeamStats, getTeamSchedule, getSleeperInjuries,
          getOdds, getPlayerProps, getNBAPlayerStats, mergeOddsIntoGames } from "./data.js";
 import { getCachedPick, setCachedPick } from "./firebase.js";
@@ -22,9 +22,8 @@ export async function loadGamesForSport(sportKey, date = null) {
  * Falls back to sequential analysis if the batch parse fails.
  */
 export async function getPicksForSport(games, onProgress) {
-  // Cap at 8 games per batch — keeps the prompt well within all free-tier limits
-  // (Groq ~3k token output cap, Gemini ~8k, OpenRouter ~4k)
-  const upcoming = games.slice(0, 8);
+  // Cap at 6 games — combined prompt (games+props) needs room; 6×450≈2700 tokens fits all free tiers
+  const upcoming = games.slice(0, 6);
   if (!upcoming.length) return [];
 
   try {
@@ -41,79 +40,70 @@ export async function getPicksForSport(games, onProgress) {
 }
 
 async function _batchAnalyze(games, onProgress) {
-  onProgress?.("Fetching team stats & injury data…", 0.15);
+  onProgress?.("Fetching schedules, stats & props…", 0.15);
 
-  // Fetch all context for all games in parallel (ESPN game logs, injury reports)
+  const oddsKey = getUserKey("oddsApi");
+  const bdlKey  = getUserKey("balldontlie");
+
+  // Fetch ALL context (team form + props) in parallel for every game at once
   const gamesWithContext = await Promise.all(games.map(async game => {
     const hasTeams = !!(game.homeTeam?.id && game.awayTeam?.id);
-    const [injuryData, homeSchedule, awaySchedule, homeStats, awayStats] = await Promise.all([
+
+    const [injuryData, homeSchedule, awaySchedule, homeStats, awayStats, rawProps] = await Promise.all([
       game.sport === "nfl" ? getSleeperInjuries().catch(() => ({})) : Promise.resolve({}),
       hasTeams ? getTeamSchedule(game.sport, game.homeTeam.id).catch(() => []) : Promise.resolve([]),
       hasTeams ? getTeamSchedule(game.sport, game.awayTeam.id).catch(() => []) : Promise.resolve([]),
       hasTeams ? getTeamStats(game.sport, game.homeTeam.id).catch(() => [])    : Promise.resolve([]),
       hasTeams ? getTeamStats(game.sport, game.awayTeam.id).catch(() => [])    : Promise.resolve([]),
+      // Fetch props alongside everything else — folded into the single LLM call
+      (oddsKey && game.oddsId) ? getPlayerProps(game.sport, game.oddsId, oddsKey).catch(() => []) : Promise.resolve([]),
     ]);
-    return { game, teamStatsHome: homeStats, teamStatsAway: awayStats,
-             injuryData, recentFormHome: homeSchedule, recentFormAway: awaySchedule };
+
+    // NBA player stats for props context
+    let playerStats = {};
+    if (game.sport === "nba" && rawProps.length && bdlKey) {
+      const names = [...new Set(rawProps.map(p => p.player).filter(Boolean))].slice(0, 6);
+      const res   = await Promise.allSettled(names.map(n => getNBAPlayerStats(n, bdlKey)));
+      names.forEach((n, i) => { if (res[i].status === "fulfilled" && res[i].value) playerStats[n] = res[i].value; });
+    }
+
+    return {
+      game,
+      teamStatsHome: homeStats, teamStatsAway: awayStats,
+      injuryData,
+      recentFormHome: homeSchedule, recentFormAway: awaySchedule,
+      props: rawProps,       // passed inline to combined prompt
+      playerStats,
+    };
   }));
 
-  onProgress?.(`Running AI analysis on all ${games.length} games…`, 0.4);
+  onProgress?.(`Running AI analysis on all ${games.length} games + props…`, 0.45);
 
-  // Single LLM call for all game analysis
-  const batchResults = await analyzeBatchGames(gamesWithContext);
+  // ONE combined LLM call — game picks AND props together
+  const combinedResults = await analyzeCombinedBatch(gamesWithContext);
 
-  // Map batch results back onto their game objects
-  let pickData = games.map(game => {
-    const result = batchResults.find(r => String(r.gameId) === String(game.id))
-                   || { gameId: game.id, picks: [], bestBet: null, noValue: true };
+  // Map results back onto game objects
+  const pickData = games.map(game => {
+    const result = combinedResults.find(r => String(r.gameId) === String(game.id))
+                   || { gameId: game.id, picks: [], props: [], bestBet: null, noValue: true };
+    const gamePicks = (result.picks  || []);
+    const propPicks = (result.props  || []);
     return {
-      gameId: game.id, game,
+      gameId:       game.id,
+      game,
       gameAnalysis: result,
-      propAnalysis: { props: [] },
-      allPicks: result.picks || [],
-      bestBet: result.bestBet || null,
-      analyzedAt: Date.now()
+      propAnalysis: { props: propPicks },
+      allPicks:     [...gamePicks, ...propPicks],
+      bestBet:      result.bestBet || null,
+      analyzedAt:   Date.now(),
     };
   });
-
-  // Batch props for games with a matched oddsId
-  const oddsKey = getUserKey("oddsApi");
-  const bdlKey  = getUserKey("balldontlie");
-  if (oddsKey) {
-    onProgress?.("Fetching & analyzing player props…", 0.75);
-    const propsInput = await _collectProps(games, oddsKey, bdlKey);
-    if (propsInput.length) {
-      const propResults = await analyzeBatchProps(propsInput).catch(() => []);
-      for (const pd of pickData) {
-        const pr = propResults.find(r => String(r.gameId) === String(pd.gameId));
-        if (pr?.props?.length) {
-          pd.propAnalysis = pr;
-          pd.allPicks = [...pd.allPicks, ...pr.props];
-        }
-      }
-    }
-  }
 
   onProgress?.(`Analysis complete — ${games.length} games`, 1.0);
   return pickData;
 }
 
-async function _collectProps(games, oddsKey, bdlKey) {
-  const results = await Promise.allSettled(
-    games.filter(g => g.oddsId).map(async game => {
-      const rawProps = await getPlayerProps(game.sport, game.oddsId, oddsKey);
-      if (!rawProps.length) return null;
-      let playerStats = {};
-      if (game.sport === "nba" && rawProps.length) {
-        const names = [...new Set(rawProps.map(p => p.player).filter(Boolean))].slice(0, 6);
-        const res   = await Promise.allSettled(names.map(n => getNBAPlayerStats(n, bdlKey)));
-        names.forEach((n, i) => { if (res[i].status === "fulfilled" && res[i].value) playerStats[n] = res[i].value; });
-      }
-      return { game, props: rawProps, playerStats };
-    })
-  );
-  return results.filter(r => r.status === "fulfilled" && r.value).map(r => r.value);
-}
+// _collectProps removed — props are now fetched inline in _batchAnalyze
 
 // ─── FALLBACK: Sequential analysis (old per-game approach) ───────────────────
 async function _sequentialAnalyze(games, onProgress) {

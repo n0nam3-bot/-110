@@ -59,7 +59,7 @@ async function callOpenRouter(prompt, key, maxTokens = 2048) {
 // Only ONE call is in-flight at a time. Each call waits for the previous to
 // finish, then pauses _LLM_GAP ms before starting — keeping all providers well
 // under their free-tier rate limits without any per-provider retry juggling.
-const _LLM_GAP = 2000; // ms minimum between successive calls
+const _LLM_GAP = 4000; // 4 s gap keeps us at ≤15 req/min — well under all free-tier limits // ms minimum between successive calls
 let   _llmChain = Promise.resolve();
 
 function callLLM(prompt, opts = {}) {
@@ -125,107 +125,108 @@ function parseJSON(text) {
 }
 
 // ─── Batch game prompt ────────────────────────────────────────────────────────
-function buildBatchGamePrompt(gamesWithContext) {
+// ─── Single combined batch prompt (games + props in ONE LLM call) ────────────
+// Merging both into one call halves the total requests per sport load and
+// prevents back-to-back calls that exhaust free-tier rate limits.
+function buildCombinedBatchPrompt(gamesWithContext) {
+  const isMMA = gamesWithContext[0]?.game?.sport === "mma";
+
   const gameBlocks = gamesWithContext.map((gc, i) => {
-    const { game, recentFormHome, recentFormAway } = gc;
-    const odds     = game.odds;
-    const isMMA    = game.sport === "mma";
-    const promo    = game.promotion ? ` (${game.promotion})` : "";
+    const { game, recentFormHome, recentFormAway, props, playerStats } = gc;
+    const odds  = game.odds;
+    const promo = game.promotion ? ` (${game.promotion})` : "";
+
+    // ── Odds line ──
     const oddsLine = odds
       ? `ML:${game.homeTeam.abbr} ${odds.moneyline?.home?.price ?? "N/A"}/` +
         `${game.awayTeam.abbr} ${odds.moneyline?.away?.price ?? "N/A"} | ` +
         `Spread:${odds.spread?.home?.point ?? "N/A"}(${odds.spread?.home?.price ?? "N/A"}) | ` +
         `O/U ${odds.total?.over?.point ?? "N/A"}(O${odds.total?.over?.price ?? "N/A"}/U${odds.total?.under?.price ?? "N/A"})`
-      : "No odds available";
-    const formH = recentFormHome?.slice(-5).map(g => g.result).join("") || "";
-    const formA = recentFormAway?.slice(-5).map(g => g.result).join("") || "";
-    const formLine = !isMMA && (formH || formA) ? ` | Form: ${game.homeTeam.abbr} ${formH||"?"} vs ${game.awayTeam.abbr} ${formA||"?"}` : "";
-    return `[${i}] ID:${game.id} | ${game.awayTeam.name} @ ${game.homeTeam.name} | ${game.sport.toUpperCase()}${promo} | ${new Date(game.date).toLocaleDateString()}\n${oddsLine}${formLine}`;
+      : "No live odds";
+
+    // ── Season records ──
+    const recH = game.homeTeam.record ? ` [${game.homeTeam.record}]` : "";
+    const recA = game.awayTeam.record ? ` [${game.awayTeam.record}]` : "";
+
+    // ── Recent form — explicit so LLM uses it instead of training data ──
+    let formLine = "";
+    if (!isMMA) {
+      const fH   = recentFormHome?.slice(-5).map(g => g.result).join("") || "";
+      const fA   = recentFormAway?.slice(-5).map(g => g.result).join("") || "";
+      const wH   = (fH.match(/W/g) || []).length;
+      const wA   = (fA.match(/W/g) || []).length;
+      const descH = fH ? `${fH} (${wH}W-${5 - wH}L last 5)` : "N/A";
+      const descA = fA ? `${fA} (${wA}W-${5 - wA}L last 5)` : "N/A";
+      formLine = `\nCURRENT FORM — use this, ignore your training data: ` +
+                 `${game.homeTeam.name}: ${descH} | ${game.awayTeam.name}: ${descA}`;
+    }
+
+    // ── Props (inline — top 8 per game to stay lean) ──
+    let propsLine = "";
+    if (props?.length) {
+      const grouped = props.reduce((a, p) => { (a[p.player] = a[p.player] || []).push(p); return a; }, {});
+      const topProps = Object.entries(grouped).slice(0, 8).map(([player, lines]) => {
+        const stat = playerStats?.[player];
+        const avg  = stat ? `[avg:${[stat.pts && `${stat.pts}pts`, stat.reb && `${stat.reb}reb`, stat.ast && `${stat.ast}ast`].filter(Boolean).join(" ")}]` : "";
+        return `${player}${avg} ${lines[0].market} ${lines[0].point}(${lines[0].price})`;
+      }).join(", ");
+      if (topProps) propsLine = `\nPROPS: ${topProps}`;
+    }
+
+    return `[${i}] ID:${game.id} | ${game.awayTeam.name}${recA} @ ${game.homeTeam.name}${recH} | ${game.sport.toUpperCase()}${promo} | ${new Date(game.date).toLocaleDateString()}
+${oddsLine}${formLine}${propsLine}`;
   }).join("\n\n");
 
-  return `You are a sharp sports betting analyst. Analyze ALL ${gamesWithContext.length} games and return a JSON array — one object per game in the EXACT same order.
+  const propNote = gamesWithContext.some(gc => gc.props?.length)
+    ? "\n- props: include notable B+ player prop picks using the PROPS lines above (omit if no props data)"
+    : "";
 
-GAMES:
+  return `Sharp sports betting analyst. Analyze ${gamesWithContext.length} games.
+⚠ CRITICAL: Use ONLY the provided odds, records, and CURRENT FORM data. Do NOT rely on your training knowledge for recent team performance, win streaks, or player rosters — that data may be months old.
+
 ${gameBlocks}
 
-RULES:
-- Grade every angle: S(conf≥8.5,edge≥7%) A(conf≥7,edge≥5%) B(conf≥5.5,edge≥3%) C(below B)
-- picks array: include ALL grades B and above (spread, moneyline, total${gamesWithContext[0]?.game?.sport === "mma" ? ", method, round" : ""})
-- bestBet: single best pick, must be grade A or S; set null + noValue:true if no value
-- Use FULL team name in selection (never abbreviation alone)
-- summary: 2 sharp sentences per game
+Rules:
+- Grades: S(conf≥8.5,edge≥7%) A(conf≥7,edge≥5%) B(conf≥5.5,edge≥3%)
+- picks: all B+ spread/ML/total angles per game
+- bestBet: one A or S pick; null+noValue:true if none${isMMA ? "\n- MMA: include method/round props" : ""}${propNote}
+- summary: 2 sentences referencing the PROVIDED form/records data, not general team reputation
 
 Return ONLY a JSON array, no markdown:
-[{"gameId":"ID","summary":"...","picks":[{"id":"g0p1","type":"spread|moneyline|total","selection":"Full Team Name Over/Under/ML/Spread","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"brief"}],"bestBet":{"id":"g0p1","type":"...","selection":"Full Team Name — exact bet","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"..."},"lean":"home|away|over|under|none","confidence":7.5,"noValue":false}]`;
+[{"gameId":"ID","summary":"...","picks":[{"id":"g0p1","type":"spread|moneyline|total","selection":"Full Team Name bet","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"1 sentence"}],"bestBet":{"id":"g0p1","type":"...","selection":"Full Team Name — exact bet","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"..."},"lean":"home|away|over|under|none","confidence":7.5,"noValue":false,"props":[{"id":"pr1","type":"prop","player":"Name","team":"ABR","market":"player_points","marketLabel":"Points","selection":"Name (ABR) Over 24.5 Points","odds":"-115","point":24.5,"direction":"over","confidence":7.0,"edge":5.0,"grade":"A","reasoning":"1 sentence"}]}]`;
 }
 
-// ─── Batch prop prompt ────────────────────────────────────────────────────────
-function buildBatchPropPrompt(propsPerGame) {
-  const blocks = propsPerGame.map((pg, i) => {
-    const { game, props, playerStats } = pg;
-    const grouped = props.reduce((acc, p) => { (acc[p.player] = acc[p.player] || []).push(p); return acc; }, {});
-    const lines = Object.entries(grouped).slice(0, 15).map(([player, ps]) => {
-      const stat = playerStats?.[player];
-      const avg  = stat ? ` [avg:${[stat.pts && `${stat.pts}pts`, stat.reb && `${stat.reb}reb`, stat.ast && `${stat.ast}ast`].filter(Boolean).join(" ")}]` : "";
-      return `  ${player}${avg}: ${ps[0].market} ${ps[0].point} (${ps[0].price})`;
-    }).join("\n");
-    return `[${i}] ID:${game.id} | ${game.awayTeam.name} @ ${game.homeTeam.name}\n${lines}`;
-  }).join("\n\n");
-
-  return `Grade player props for ${propsPerGame.length} games. Include ALL B+ props (conf≥5.5, edge≥3%). Full player name + team abbr in selection.
-
-${blocks}
-
-Return ONLY JSON array:
-[{"gameId":"ID","props":[{"id":"p0_1","type":"prop","player":"Full Name","team":"ABR","market":"player_points","marketLabel":"Points","selection":"Full Name (ABR) Over 24.5 Points","odds":"-115","point":24.5,"direction":"over","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"brief"}]}]`;
-}
-
-// ─── Batch analysis exports ───────────────────────────────────────────────────
-export async function analyzeBatchGames(gamesWithContext) {
+// ─── Single combined export (replaces separate analyzeBatchGames + analyzeBatchProps) ──
+export async function analyzeCombinedBatch(gamesWithContext) {
   if (!gamesWithContext.length) return [];
-  // Batch calls need more output tokens — 12 games × ~400 tokens each
-  const maxTokens = Math.min(8000, Math.max(2048, gamesWithContext.length * 500));
-  const prompt    = buildBatchGamePrompt(gamesWithContext);
+  // 6 games × ~450 tokens each = ~2700 output tokens — fits Groq's 3k cap + has headroom
+  const maxTokens = Math.min(4000, Math.max(2048, gamesWithContext.length * 450));
+  const prompt    = buildCombinedBatchPrompt(gamesWithContext);
   const { text, provider } = await callLLM(prompt, { maxTokens });
 
-  // Parse — try full JSON first, then hunt for the array
   const clean = text.replace(/```json|```/g, "").trim();
-  let parsed   = null;
+  let parsed  = null;
   try { parsed = JSON.parse(clean); } catch {}
   if (!Array.isArray(parsed)) {
     const m = clean.match(/\[[\s\S]*\]/);
     if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
   }
   if (!Array.isArray(parsed)) {
-    console.warn("Batch parse failed — raw:", clean.slice(0, 300));
+    console.warn("Combined batch parse failed — raw:", clean.slice(0, 300));
     throw new Error("BATCH_PARSE_FAILED");
   }
 
   return parsed.map(result => {
-    result.picks = (result.picks || []).filter(p => p.confidence >= 5.5 && p.edge >= 3.0).slice(0, 6);
+    result.picks = (result.picks || []).filter(p => p.confidence >= 5.5 && p.edge >= 3.0).slice(0, 8);
+    result.props = (result.props || []).filter(p => p.confidence >= 5.5 && p.edge >= 3.0);
     if (result.bestBet?.confidence < CONFIG.bestBet.minConfidence) { result.bestBet = null; result.noValue = true; }
     return { ...result, provider, analyzedAt: Date.now() };
   });
 }
 
-export async function analyzeBatchProps(propsPerGame) {
-  if (!propsPerGame.length) return [];
-  const maxTokens = Math.min(6000, Math.max(1024, propsPerGame.length * 400));
-  const prompt    = buildBatchPropPrompt(propsPerGame);
-  const { text }  = await callLLM(prompt, { maxTokens });
-  const clean     = text.replace(/```json|```/g, "").trim();
-  let parsed      = null;
-  try { parsed = JSON.parse(clean); } catch {}
-  if (!Array.isArray(parsed)) {
-    const m = clean.match(/\[[\s\S]*\]/);
-    if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
-  }
-  if (!Array.isArray(parsed)) return [];
-  return parsed.map(r => ({
-    ...r,
-    props: (r.props || []).filter(p => p.confidence >= 5.5 && p.edge >= 3.0)
-  }));
-}
+// Legacy exports kept for the sequential fallback path
+export async function analyzeBatchGames(gamesWithContext) { return analyzeCombinedBatch(gamesWithContext); }
+export async function analyzeBatchProps(_propsPerGame)     { return []; } // merged into combined call
 
 // ─── Individual game analysis (kept as fallback) ──────────────────────────────
 function buildGamePrompt(game, teamStatsHome, teamStatsAway, injuryData, recentFormHome, recentFormAway) {

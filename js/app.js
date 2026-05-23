@@ -262,7 +262,7 @@ async function _fetchAndAnalyze(sportKey, date) {
     // ── 2. Fetch schedules + odds (fast, no LLM) ──
     _showProgress(sportKey, "Fetching schedules & odds…", 0.08);
     const games    = await loadGamesForSport(sportKey, date);
-    const upcoming = games.slice(0, 8); // cap matches picks.js batch limit
+    const upcoming = games.slice(0, 6); // cap matches picks.js 6-game combined batch limit
 
     _sportCache[sportKey] = { games, pickData: [], loadedAt: null };
 
