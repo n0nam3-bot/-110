@@ -11,7 +11,7 @@ let app, auth, db;
 export function initFirebase() {
   if (CONFIG.firebase.apiKey.startsWith("FIREBASE_")) {
     console.error("Replace FIREBASE_* placeholders in js/config.js");
-    showFirebaseSetupBanner();
+    _showSetupBanner();
     return;
   }
   app  = initializeApp(CONFIG.firebase);
@@ -19,10 +19,10 @@ export function initFirebase() {
   db   = getFirestore(app);
 }
 
-function showFirebaseSetupBanner() {
-  if (document.getElementById("firebase-setup-banner")) return;
+function _showSetupBanner() {
+  if (document.getElementById("fb-setup-banner")) return;
   const b = document.createElement("div");
-  b.id = "firebase-setup-banner";
+  b.id = "fb-setup-banner";
   b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:9999;background:#1a1a00;border-bottom:2px solid #b5f23d;padding:14px 20px;font-family:monospace;font-size:13px;color:#b5f23d;text-align:center;line-height:1.6";
   b.innerHTML = `<strong>⚙ Setup Required</strong> — Open <code>js/config.js</code> and replace <code>FIREBASE_*</code> with your real Firebase credentials. <a href="https://console.firebase.google.com" target="_blank" style="color:#b5f23d">console.firebase.google.com →</a>`;
   document.body.prepend(b);
@@ -33,7 +33,6 @@ export function onUserChange(cb) { if (!auth) return; onAuthStateChanged(auth, c
 export async function loginGoogle() { return signInWithPopup(auth, new GoogleAuthProvider()); }
 export async function loginEmail(email, password) { return signInWithEmailAndPassword(auth, email, password); }
 export async function logout() { return signOut(auth); }
-
 export async function sendPasswordReset(email) {
   if (!auth) throw new Error("Firebase not initialised");
   return sendPasswordResetEmail(auth, email);
@@ -41,8 +40,10 @@ export async function sendPasswordReset(email) {
 
 export async function registerEmail(email, password, displayName) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
-  await updateProfile(cred.user, { displayName });
-  await ensureUserDoc(cred.user);
+  // Use provided display name, fall back to email prefix — never "Bettor"
+  const name = displayName?.trim() || email.split("@")[0];
+  await updateProfile(cred.user, { displayName: name });
+  await ensureUserDoc({ ...cred.user, displayName: name });
   return cred;
 }
 
@@ -51,8 +52,10 @@ export async function ensureUserDoc(user) {
   const ref  = doc(db, "users", user.uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
+    // Never store "Bettor" — use display name or email prefix
+    const name = user.displayName?.trim() || user.email?.split("@")[0] || "Member";
     await setDoc(ref, {
-      uid: user.uid, displayName: user.displayName || "Bettor",
+      uid: user.uid, displayName: name,
       email: user.email, createdAt: serverTimestamp(),
       picks: [], savedPicks: [],
       record: { wins:0, losses:0, pushes:0 },
@@ -72,7 +75,6 @@ export async function updateUserDoc(uid, data) {
   await updateDoc(doc(db, "users", uid), data);
 }
 
-// ── Pick cache ────────────────────────────────────────────────────────────────
 export async function getCachedPick(gameId) {
   if (!db) return null;
   try {
@@ -84,12 +86,11 @@ export async function getCachedPick(gameId) {
   } catch { return null; }
 }
 
-export async function setCachedPick(gameId, pickData) {
+export async function setCachedPick(gameId, data) {
   if (!db) return;
-  try { await setDoc(doc(db, "pick_cache", gameId), { ...pickData, cachedAt: Date.now() }); } catch {}
+  try { await setDoc(doc(db, "pick_cache", gameId), { ...data, cachedAt: Date.now() }); } catch {}
 }
 
-// ── Saved picks ───────────────────────────────────────────────────────────────
 export async function savePick(uid, pick) {
   if (!db || !uid) return;
   const ref  = doc(db, "users", uid);
@@ -110,7 +111,6 @@ export async function unsavePick(uid, pickId) {
   await updateDoc(ref, { savedPicks: (snap.data().savedPicks || []).filter(p => p.id !== pickId) });
 }
 
-// ── Keys ──────────────────────────────────────────────────────────────────────
 function _enc(v) { try { return v ? btoa(v) : ""; } catch { return ""; } }
 function _dec(v) { try { return v ? atob(v) : ""; } catch { return ""; } }
 
@@ -137,8 +137,7 @@ export async function syncUserKeysToLocalStorage(uid) {
 }
 
 function _writeKeysToLS(keys) {
-  const map = { oddsApi: KEYS.oddsApi, gemini: KEYS.gemini, groq: KEYS.groq, openrouter: KEYS.openrouter, balldontlie: KEYS.balldontlie };
-  for (const [name, lsKey] of Object.entries(map)) {
+  const map = { oddsApi:KEYS.oddsApi, gemini:KEYS.gemini, groq:KEYS.groq, openrouter:KEYS.openrouter, balldontlie:KEYS.balldontlie };
+  for (const [name, lsKey] of Object.entries(map))
     if (keys[name] !== undefined) localStorage.setItem(lsKey, keys[name]);
-  }
 }
