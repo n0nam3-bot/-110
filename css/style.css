@@ -849,22 +849,33 @@ button { cursor: pointer; font-family: inherit; border: none; }
   .summary-stat:nth-child(n+5) { display: none; }
 }
 
-/* ─── MMA promotion badge ────────────────────────────────────────────────────── */
-.promotion-badge {
-  font-size: .62rem;
+/* ─── Best bet highlighted in pick list ─────────────────────────────────────── */
+.pick-row-best {
+  border-color: rgba(181,242,61,.3) !important;
+  background: rgba(181,242,61,.04) !important;
+  position: relative;
+}
+.pick-row-best::before {
+  content: "🔥";
+  position: absolute;
+  left: -22px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: .75rem;
+  opacity: .8;
+}
+
+/* ─── All picks section header ───────────────────────────────────────────────── */
+.all-picks-header {
+  font-size: .65rem;
   font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
-  color: var(--accent);
-  background: rgba(181,242,61,.08);
-  border: 1px solid rgba(181,242,61,.2);
-  border-radius: 4px;
-  padding: 2px 7px;
-  margin-bottom: 8px;
-  display: inline-block;
+  color: var(--text3);
+  padding: 8px 4px 4px;
 }
 
-/* ─── Auth success ───────────────────────────────────────────────────────────── */
+/* ─── Auth success message ───────────────────────────────────────────────────── */
 .form-success {
   background: rgba(181,242,61,.08);
   border: 1px solid rgba(181,242,61,.3);
@@ -875,27 +886,16 @@ button { cursor: pointer; font-family: inherit; border: none; }
   margin-bottom: 12px;
 }
 
-/* ─── Promotion badge (MMA/UFC/PFL/etc) ──────────────────────────────────────── */
-.promotion-badge {
-  display: inline-flex;
-  align-items: center;
-  background: rgba(181,242,61,.1);
-  border: 1px solid rgba(181,242,61,.25);
-  color: var(--accent);
-  font-size: .62rem;
-  font-weight: 800;
-  letter-spacing: .08em;
+/* ── MMA Promotion badge ─────────────────────────────────────────────────── */
+.mma-promotion-badge {
+  display: inline-block;
+  font-size: .60rem;
+  font-weight: 700;
+  letter-spacing: .05em;
   text-transform: uppercase;
-  padding: 2px 8px;
-  border-radius: 999px;
-  margin-bottom: 6px;
-  align-self: flex-start;
-}
-
-
-/* ─── MMA card: promotion badge stacks above fighter rows ────────────────────── */
-.game-card .game-teams {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent, #b5f23d);
+  color: #0a0a0a;
+  margin-bottom: 2px;
 }
