@@ -19,7 +19,7 @@ async function callGroq(prompt, key, maxTokens = 2048) {
   if (!key) throw new Error("no_key");
   // Groq free tier rejects requests whose combined token budget exceeds ~4k;
   // cap output tokens at 3000 to ensure the request body stays under the limit.
-  const effectiveMax = Math.min(maxTokens, 3000);
+  const effectiveMax = Math.min(maxTokens, 4000); // raised from 3000 — batch prompts need room
   const models = [CONFIG.llm.groq.model, CONFIG.llm.groq.fallbackModel].filter(Boolean);
   for (const model of models) {
     const body = {
@@ -217,30 +217,32 @@ function buildCombinedBatchPrompt(gamesWithContext) {
 ${oddsLine}${formLine}${propsLine}`;
   }).join("\n\n");
 
-  const propNote = gamesWithContext.some(gc => gc.props?.length)
-    ? "\n- props: include notable B+ player prop picks using the PROPS lines above (omit if no props data)"
-    : "";
+  const hasProps  = gamesWithContext.some(gc => gc.props?.length);
 
-  return `Sharp sports betting analyst. Analyze ${gamesWithContext.length} games.
-⚠ CRITICAL: Use ONLY the provided odds, records, and CURRENT FORM data. Do NOT rely on your training knowledge for recent team performance, win streaks, or player rosters — that data may be months old.
+  return `You are a sharp sports betting analyst. Analyze ALL ${gamesWithContext.length} game(s) below.
+
+⚠ CRITICAL RULES — violating these makes the output useless:
+1. Use ONLY the provided odds, records, and CURRENT FORM data. Ignore your training knowledge for team performance and rosters.
+2. Every game MUST have ALL THREE base picks: Spread, Moneyline, AND Total (Over/Under).
+3. SPREAD picks: ALWAYS write the exact point value — "Tampa Bay Rays -1.5" NOT "Tampa Bay Rays spread".
+4. TOTAL picks: ALWAYS write the number — "Over 7.5" or "Under 7.5" NOT just "Over".
+5. Include every B+ angle. Minimum 3 picks per game; target 5–7 including props when available.
+6. Grade hierarchy (strictly follow): S=conf≥8.5,edge≥7% | A=conf≥7,edge≥5% | B=conf≥5.5,edge≥3%
+7. bestBet MUST be your single highest-graded pick (S first, then A). If best grade is B, set bestBet=null and noValue=true.
+8. Reasoning: ≤10 words each — be sharp, not verbose.${hasProps ? "\n9. Props: rate every PROPS line listed — include all B+ prop picks." : ""}${isMMA ? "\n9. MMA: also grade method (KO/Sub/Dec) and round props." : ""}
 
 ${gameBlocks}
 
-Rules:
-- Grades: S(conf≥8.5,edge≥7%) A(conf≥7,edge≥5%) B(conf≥5.5,edge≥3%)
-- picks: all B+ spread/ML/total angles per game
-- bestBet: one A or S pick; null+noValue:true if none${isMMA ? "\n- MMA: include method/round props" : ""}${propNote}
-- summary: 2 sentences referencing the PROVIDED form/records data, not general team reputation
-
-Return ONLY a JSON array, no markdown:
-[{"gameId":"ID","summary":"...","picks":[{"id":"g0p1","type":"spread|moneyline|total","selection":"Full Team Name bet","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"1 sentence"}],"bestBet":{"id":"g0p1","type":"...","selection":"Full Team Name — exact bet","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"..."},"lean":"home|away|over|under|none","confidence":7.5,"noValue":false,"props":[{"id":"pr1","type":"prop","player":"Name","team":"ABR","market":"player_points","marketLabel":"Points","selection":"Name (ABR) Over 24.5 Points","odds":"-115","point":24.5,"direction":"over","confidence":7.0,"edge":5.0,"grade":"A","reasoning":"1 sentence"}]}]`;
+Return ONLY a valid JSON array — no markdown, no preamble, no trailing text:
+[{"gameId":"ID","summary":"2 sentences using provided form/records only","picks":[{"id":"g0p1","type":"spread|moneyline|total","selection":"Full Team Name ±X.X or Over/Under X.X","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"≤10 words"}],"bestBet":{"id":"g0p1","type":"...","selection":"Full Team Name ±X.X — exact bet","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"≤10 words"},"lean":"home|away|over|under|none","confidence":7.5,"noValue":false,"props":[{"id":"pr1","type":"prop","player":"Full Name","team":"ABR","market":"player_points","marketLabel":"Points","selection":"Full Name (ABR) Over 24.5 Points","odds":"-115","point":24.5,"direction":"over","confidence":7.0,"edge":5.0,"grade":"A","reasoning":"≤10 words"}]}]`;
 }
 
 // ─── Single combined export (replaces separate analyzeBatchGames + analyzeBatchProps) ──
 export async function analyzeCombinedBatch(gamesWithContext) {
   if (!gamesWithContext.length) return [];
   // 6 games × ~450 tokens each = ~2700 output tokens — fits Groq's 3k cap + has headroom
-  const maxTokens = Math.min(4000, Math.max(2048, gamesWithContext.length * 450));
+  // 650 tokens/game covers 5–7 picks + props per game without truncation
+  const maxTokens = Math.min(5000, Math.max(2500, gamesWithContext.length * 650));
   const prompt    = buildCombinedBatchPrompt(gamesWithContext);
   const { text, provider } = await callLLM(prompt, { maxTokens });
 
@@ -256,10 +258,59 @@ export async function analyzeCombinedBatch(gamesWithContext) {
     throw new Error("BATCH_PARSE_FAILED");
   }
 
+  // Grade sort order (lower number = higher priority)
+  const GRADE = { S:0, A:1, B:2, C:3 };
+
+  // Fix spread/total selections that are missing the point value
+  function fixSelection(pick, gc) {
+    if (!gc?.game?.odds || !pick?.selection) return pick;
+    const odds = gc.game.odds;
+    if (pick.type === "spread" && !/[+-]?\d+\.?\d/.test(pick.selection)) {
+      const nameWords = pick.selection.toLowerCase().split(" ");
+      const homeLast  = gc.game.homeTeam.name.toLowerCase().split(" ").pop();
+      const isHome    = nameWords.some(w => w.startsWith(homeLast.slice(0, 4)));
+      const sp        = isHome ? odds.spread?.home : odds.spread?.away;
+      if (sp?.point !== undefined) {
+        const sign = sp.point >= 0 ? "+" : "";
+        pick.selection = `${pick.selection.trim()} ${sign}${sp.point}`;
+      }
+    }
+    if (pick.type === "total" && !/\d+\.?\d/.test(pick.selection)) {
+      const pt = odds.total?.over?.point;
+      if (pt !== undefined) {
+        const dir = /under/i.test(pick.selection) ? "Under" : "Over";
+        pick.selection = `${dir} ${pt}`;
+      }
+    }
+    return pick;
+  }
+
   return parsed.map(result => {
-    result.picks = (result.picks || []).filter(p => p.confidence >= 5.5 && p.edge >= 3.0).slice(0, 8);
-    result.props = (result.props || []).filter(p => p.confidence >= 5.5 && p.edge >= 3.0);
-    if (result.bestBet?.confidence < CONFIG.bestBet.minConfidence) { result.bestBet = null; result.noValue = true; }
+    // Find matching game context for spread/total fixes
+    const gc = gamesWithContext.find(g => String(g.game.id) === String(result.gameId));
+
+    // Fix any missing point values before filtering
+    (result.picks || []).forEach(p => fixSelection(p, gc));
+    (result.props || []).forEach(p => fixSelection(p, gc));
+
+    // Lower threshold slightly so more picks survive (LLM sometimes undershoots grades)
+    const gamePicks = (result.picks || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
+    const propPicks = (result.props || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
+
+    // Merge and sort S → A → B → C (then by confidence within same grade)
+    const allSorted = [...gamePicks, ...propPicks].sort(
+      (a, b) => (GRADE[a.grade] ?? 9) - (GRADE[b.grade] ?? 9) || (b.confidence ?? 0) - (a.confidence ?? 0)
+    );
+
+    result.picks = allSorted.slice(0, 12); // store top 12 across game + prop picks
+    result.props = propPicks;              // keep props separately for compatibility
+
+    // Force bestBet = highest-graded pick (must be S or A — never B)
+    // This overrides whatever the LLM chose to guarantee grade accuracy
+    const bestCandidate = allSorted.find(p => p.grade === "S" || p.grade === "A");
+    result.bestBet = bestCandidate || null;
+    if (!result.bestBet) { result.noValue = true; }
+
     return { ...result, provider, analyzedAt: Date.now() };
   });
 }
