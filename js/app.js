@@ -211,7 +211,7 @@ function _renderLandingHint() {
 
 function _renderSportSection(sportKey, games, pickData) {
   const s        = CONFIG.sports[sportKey];
-  const upcoming = (games || []).slice(0, 6);
+  const displayGames = (games || []);
   let   section  = document.getElementById(`sport-section-${sportKey}`);
   if (!section) {
     section = document.createElement("div");
@@ -220,7 +220,7 @@ function _renderSportSection(sportKey, games, pickData) {
     document.getElementById("results-area").appendChild(section);
   }
 
-  if (!upcoming.length) {
+  if (!displayGames.length) {
     section.innerHTML = `
       <div class="sport-section-header">
         <span class="sport-section-title">${s.emoji} ${s.label}</span>
@@ -229,15 +229,17 @@ function _renderSportSection(sportKey, games, pickData) {
     return;
   }
 
-  const cards = upcoming.map(g => {
-    const pd = (pickData || []).find(pd => pd.gameId === g.id) || null;
-    return renderGameCard(g, pd, state.savedIds);
+  const RENDER_CAP = 8; // only AI picks available for the first 8
+  const cards = displayGames.map((g, idx) => {
+    const pd       = (pickData || []).find(pd => pd.gameId === g.id) || null;
+    const fallback = idx >= RENDER_CAP ? { allPicks:[], bestBet:null, noAnalysis:true } : null;
+    return renderGameCard(g, pd || fallback, state.savedIds);
   }).join("");
 
   section.innerHTML = `
     <div class="sport-section-header" id="anchor-${sportKey}">
       <span class="sport-section-title">${s.emoji} ${s.label}</span>
-      <span class="sport-section-badge">${upcoming.length} game${upcoming.length !== 1 ? "s" : ""}</span>
+      <span class="sport-section-badge">${displayGames.length} game${displayGames.length !== 1 ? "s" : ""}</span>
     </div>
     <div class="sport-section-games" id="sport-games-${sportKey}">${cards}</div>`;
 
@@ -265,8 +267,15 @@ function _renderJumpNav() {
   }
   nav.innerHTML = loaded.map(sk => {
     const s = CONFIG.sports[sk];
-    return `<a class="jump-link" href="#anchor-${sk}">${s.emoji} ${s.label}</a>`;
+    return `<button class="jump-link" data-target="anchor-${sk}" type="button">${s.emoji} ${s.label}</button>`;
   }).join("");
+  // Attach scroll handlers after rendering
+  nav.querySelectorAll(".jump-link").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const el = document.getElementById(btn.dataset.target);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
 }
 
 // ─── Main run function ────────────────────────────────────────────────────────
@@ -376,8 +385,12 @@ async function _fetchAndAnalyzeSport(sportKey, date, onProgress) {
   const s = CONFIG.sports[sportKey];
 
   onProgress?.("Fetching schedules & odds…", 0.05);
-  const games    = await loadGamesForSport(sportKey, date);
-  const upcoming = games.slice(0, 6);
+  const games = await loadGamesForSport(sportKey, date);
+
+  // Show ALL fetched games; only run AI on the first ANALYSIS_CAP to stay within token limits
+  const ANALYSIS_CAP  = 8;
+  const analysisGames = games.slice(0, ANALYSIS_CAP);   // LLM analyzes these
+  const displayGames  = games;                           // all shown to user
 
   // Create/update section immediately
   let section = document.getElementById(`sport-section-${sportKey}`);
@@ -388,7 +401,7 @@ async function _fetchAndAnalyzeSport(sportKey, date, onProgress) {
     document.getElementById("results-area").appendChild(section);
   }
 
-  if (!upcoming.length) {
+  if (!displayGames.length) {
     const dateLabel = date
       ? new Date(date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3"))
           .toLocaleDateString("en-US", { weekday:"long", month:"long", day:"numeric" })
@@ -409,28 +422,32 @@ async function _fetchAndAnalyzeSport(sportKey, date, onProgress) {
     return;
   }
 
-  // Show placeholder cards immediately
+  // Show ALL game cards immediately — games beyond analysis cap show "odds only"
   section.innerHTML = `
-    <div class="sport-section-header">
+    <div class="sport-section-header" id="anchor-${sportKey}">
       <span class="sport-section-title">${s.emoji} ${s.label}</span>
-      <span class="sport-section-badge">${upcoming.length} game${upcoming.length !== 1 ? "s" : ""}</span>
+      <span class="sport-section-badge">${displayGames.length} game${displayGames.length !== 1 ? "s" : ""}</span>
     </div>
     <div class="sport-section-games" id="sport-games-${sportKey}">
-      ${upcoming.map(g => renderGameCard(g, null, state.savedIds)).join("")}
+      ${displayGames.map((g, idx) => {
+        const placeholder = idx < ANALYSIS_CAP ? null : { allPicks:[], bestBet:null, noAnalysis:true };
+        return renderGameCard(g, placeholder, state.savedIds);
+      }).join("")}
     </div>`;
   attachToggleHandlers();
 
-  // Run combined batch analysis
-  const pickData = await getPicksForSport(upcoming, (msg, pct) => {
+  // Run combined batch analysis on first ANALYSIS_CAP games
+  const pickData = await getPicksForSport(analysisGames, (msg, pct) => {
     onProgress?.(msg, 0.12 + pct * 0.83);
   });
 
-  // Re-render with picks
+  // Re-render all cards: picks for analyzed games, odds-only for the rest
   const gamesEl = document.getElementById(`sport-games-${sportKey}`);
   if (gamesEl) {
-    gamesEl.innerHTML = upcoming.map(g => {
-      const pd = pickData.find(pd => pd.gameId === g.id) || null;
-      return renderGameCard(g, pd, state.savedIds);
+    gamesEl.innerHTML = displayGames.map((g, idx) => {
+      const pd       = pickData.find(pd => pd.gameId === g.id) || null;
+      const fallback = idx >= ANALYSIS_CAP ? { allPicks:[], bestBet:null, noAnalysis:true } : null;
+      return renderGameCard(g, pd || fallback, state.savedIds);
     }).join("");
     attachToggleHandlers();
     attachSaveHandlers(pickData, state.savedIds, onSaveChange);

@@ -22,8 +22,9 @@ export async function loadGamesForSport(sportKey, date = null) {
  * Falls back to sequential analysis if the batch parse fails.
  */
 export async function getPicksForSport(games, onProgress) {
-  // Cap at 6 games — combined prompt (games+props) needs room; 6×450≈2700 tokens fits all free tiers
-  const upcoming = games.slice(0, 6);
+  // Analyze up to 8 games per batch — 8×450≈3600 tokens, within Gemini/OpenRouter limits;
+  // Groq gets the first call so is still within its 3k cap for 8-game prompts
+  const upcoming = games.slice(0, 8);
   if (!upcoming.length) return [];
 
   try {

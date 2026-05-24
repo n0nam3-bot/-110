@@ -140,6 +140,8 @@ export function renderGameCard(game, pickResult, savedIds = []) {
       <div class="pick-section" id="picks-${game.id}">
         ${analyzing ? `
           <div class="analyzing-row"><div class="spinner"></div><span>Analyzing matchup…</span></div>
+        ` : pickResult?.noAnalysis ? `
+          <div class="no-value-row" style="color:var(--text3,#555);font-size:.72rem">Odds only — select fewer sports to run AI analysis on this game</div>
         ` : hasError ? `
           <div class="no-value-row">⚠ Analysis unavailable — check API keys in Settings</div>
         ` : sortedPicks.length > 0 ? `
