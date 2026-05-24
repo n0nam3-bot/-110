@@ -15,29 +15,83 @@ export async function loadGamesForSport(sportKey, date = null) {
   return mergeOddsIntoGames(games, oddsData);
 }
 
-// ─── PRIMARY: Batch analysis (1 LLM call for all games) ──────────────────────
+// ─── PRIMARY: Batch analysis (2 LLM calls — all games covered) ───────────────
 /**
- * Analyze a full sport card in a single LLM call.
- * onProgress(message, pct) is called at each phase (0.0 – 1.0).
- * Falls back to sequential analysis if the batch parse fails.
+ * Analyze ALL games for a sport slate across two batches of up to 6 each.
+ *
+ * Batch 1  →  games 1-6  (runs immediately)
+ * Cooldown →  15 s visible countdown so providers reset rate limits
+ * Batch 2  →  games 7-12 (runs after cooldown, if any remain)
+ *
+ * onProgress(message, pct 0-1) — progress bar updates throughout.
+ * onBatchComplete(partialPickData) — called after Batch 1 finishes so the UI
+ *   can render those cards immediately while Batch 2 is still loading.
  */
-export async function getPicksForSport(games, onProgress) {
-  // Analyze up to 8 games per batch — 8×450≈3600 tokens, within Gemini/OpenRouter limits;
-  // Groq gets the first call so is still within its 3k cap for 8-game prompts
-  const upcoming = games.slice(0, 8);
-  if (!upcoming.length) return [];
+const BATCH_SIZE   = 6;   // max games per LLM call (6×450≈2700 tokens — safe for all providers)
+const COOLDOWN_S   = 15;  // seconds between batches
 
+export async function getPicksForSport(games, onProgress, onBatchComplete) {
+  if (!games.length) return [];
+
+  const batch1    = games.slice(0, BATCH_SIZE);
+  const batch2    = games.slice(BATCH_SIZE);
+  const hasBatch2 = batch2.length > 0;
+
+  // Progress zones:  batch1 = 0–0.44 | cooldown = 0.44–0.50 | batch2 = 0.50–1.0
+  let allPickData = [];
+
+  // ── Batch 1 ──────────────────────────────────────────────────────────────
   try {
-    return await _batchAnalyze(upcoming, onProgress);
+    const picks1 = await _batchAnalyze(batch1, (msg, pct) =>
+      onProgress?.(msg, pct * (hasBatch2 ? 0.44 : 1.0))
+    );
+    allPickData = [...picks1];
   } catch (e) {
-    console.warn("Batch analysis failed, falling back to sequential:", e.message);
-    // The batch attempt may have exhausted provider rate limits; cool down
-    // before retrying individually so the first sequential call has a clean slate.
-    onProgress?.("Cooling down before sequential fallback…", 0.45);
+    console.warn("Batch 1 failed, sequential fallback:", e.message);
+    onProgress?.("Cooling down before sequential fallback…", hasBatch2 ? 0.18 : 0.44);
     await new Promise(r => setTimeout(r, 8000));
-    onProgress?.("Running sequential analysis…", 0.5);
-    return await _sequentialAnalyze(upcoming, onProgress);
+    const picks1 = await _sequentialAnalyze(batch1, (msg, pct) =>
+      onProgress?.(msg, pct * (hasBatch2 ? 0.44 : 1.0))
+    );
+    allPickData = [...picks1];
   }
+
+  // Notify caller so it can render Batch-1 cards immediately
+  onBatchComplete?.(allPickData);
+
+  if (!hasBatch2) {
+    onProgress?.(`✓ All ${games.length} games analyzed`, 1.0);
+    return allPickData;
+  }
+
+  // ── Cooldown (visible countdown) ─────────────────────────────────────────
+  for (let i = 0; i <= COOLDOWN_S; i++) {
+    const remaining = COOLDOWN_S - i;
+    onProgress?.(
+      `⏳ Loading Batch 2 in ${remaining}s — ${batch2.length} more game${batch2.length !== 1 ? "s" : ""} to go…`,
+      0.44 + (i / COOLDOWN_S) * 0.06
+    );
+    if (remaining > 0) await new Promise(r => setTimeout(r, 1000));
+  }
+
+  // ── Batch 2 ──────────────────────────────────────────────────────────────
+  try {
+    const picks2 = await _batchAnalyze(batch2, (msg, pct) =>
+      onProgress?.(msg, 0.50 + pct * 0.50)
+    );
+    allPickData = [...allPickData, ...picks2];
+  } catch (e) {
+    console.warn("Batch 2 failed, sequential fallback:", e.message);
+    onProgress?.("Cooling down before sequential fallback…", 0.75);
+    await new Promise(r => setTimeout(r, 8000));
+    const picks2 = await _sequentialAnalyze(batch2, (msg, pct) =>
+      onProgress?.(msg, 0.50 + pct * 0.45)
+    );
+    allPickData = [...allPickData, ...picks2];
+  }
+
+  onProgress?.(`✓ All ${games.length} games analyzed`, 1.0);
+  return allPickData;
 }
 
 async function _batchAnalyze(games, onProgress) {

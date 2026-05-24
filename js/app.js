@@ -154,6 +154,8 @@ function _showMasterProgress(msg, pct) {
     feed?.insertAdjacentElement("afterbegin", bar);
   }
   const pctInt = Math.round(pct * 100);
+  const isCooldown = msg.startsWith("⏳");
+  bar.className = `master-progress${isCooldown ? " mp-cooldown" : ""}`;
   bar.innerHTML = `
     <div class="mp-row">
       <span class="mp-label">${msg}</span>
@@ -229,11 +231,9 @@ function _renderSportSection(sportKey, games, pickData) {
     return;
   }
 
-  const RENDER_CAP = 8; // only AI picks available for the first 8
-  const cards = displayGames.map((g, idx) => {
-    const pd       = (pickData || []).find(pd => pd.gameId === g.id) || null;
-    const fallback = idx >= RENDER_CAP ? { allPicks:[], bestBet:null, noAnalysis:true } : null;
-    return renderGameCard(g, pd || fallback, state.savedIds);
+  const cards = displayGames.map(g => {
+    const pd = (pickData || []).find(r => r.gameId === g.id) || null;
+    return renderGameCard(g, pd, state.savedIds);
   }).join("");
 
   section.innerHTML = `
@@ -387,10 +387,8 @@ async function _fetchAndAnalyzeSport(sportKey, date, onProgress) {
   onProgress?.("Fetching schedules & odds…", 0.05);
   const games = await loadGamesForSport(sportKey, date);
 
-  // Show ALL fetched games; only run AI on the first ANALYSIS_CAP to stay within token limits
-  const ANALYSIS_CAP  = 8;
-  const analysisGames = games.slice(0, ANALYSIS_CAP);   // LLM analyzes these
-  const displayGames  = games;                           // all shown to user
+  // All fetched games are analyzed — split into two batches of 6 internally
+  const displayGames = games;
 
   // Create/update section immediately
   let section = document.getElementById(`sport-section-${sportKey}`);
@@ -422,32 +420,46 @@ async function _fetchAndAnalyzeSport(sportKey, date, onProgress) {
     return;
   }
 
-  // Show ALL game cards immediately — games beyond analysis cap show "odds only"
+  // Show ALL game cards immediately as loading spinners — AI fills them in as batches complete
   section.innerHTML = `
     <div class="sport-section-header" id="anchor-${sportKey}">
       <span class="sport-section-title">${s.emoji} ${s.label}</span>
       <span class="sport-section-badge">${displayGames.length} game${displayGames.length !== 1 ? "s" : ""}</span>
     </div>
     <div class="sport-section-games" id="sport-games-${sportKey}">
-      ${displayGames.map((g, idx) => {
-        const placeholder = idx < ANALYSIS_CAP ? null : { allPicks:[], bestBet:null, noAnalysis:true };
-        return renderGameCard(g, placeholder, state.savedIds);
-      }).join("")}
+      ${displayGames.map(g => renderGameCard(g, null, state.savedIds)).join("")}
     </div>`;
   attachToggleHandlers();
 
-  // Run combined batch analysis on first ANALYSIS_CAP games
-  const pickData = await getPicksForSport(analysisGames, (msg, pct) => {
+  // Helper: re-render all cards using whatever pick data we have so far
+  function _reRenderCards(partialPickData) {
+    const gamesEl = document.getElementById(`sport-games-${sportKey}`);
+    if (!gamesEl) return;
+    gamesEl.innerHTML = displayGames.map(g => {
+      const pd = (partialPickData || []).find(r => r.gameId === g.id) || null;
+      return renderGameCard(g, pd, state.savedIds); // null = still shows loading spinner
+    }).join("");
+    attachToggleHandlers();
+    attachSaveHandlers(partialPickData || [], state.savedIds, onSaveChange);
+  }
+
+  // Run analysis across all games — picks.js splits into 2 batches with cooldown internally
+  const pickData = await getPicksForSport(displayGames, (msg, pct) => {
     onProgress?.(msg, 0.12 + pct * 0.83);
+  }, (batch1Results) => {
+    // Batch 1 finished — render those cards right away; rest stay as loading spinners
+    _reRenderCards(batch1Results);
+    // Update sidebar with what we have so far
+    state.pickData[sportKey] = batch1Results;
+    _updateAggregateSidebar();
   });
 
-  // Re-render all cards: picks for analyzed games, odds-only for the rest
+  // Final re-render with complete pick data for every game
   const gamesEl = document.getElementById(`sport-games-${sportKey}`);
   if (gamesEl) {
-    gamesEl.innerHTML = displayGames.map((g, idx) => {
-      const pd       = pickData.find(pd => pd.gameId === g.id) || null;
-      const fallback = idx >= ANALYSIS_CAP ? { allPicks:[], bestBet:null, noAnalysis:true } : null;
-      return renderGameCard(g, pd || fallback, state.savedIds);
+    gamesEl.innerHTML = displayGames.map(g => {
+      const pd = pickData.find(r => r.gameId === g.id) || null;
+      return renderGameCard(g, pd, state.savedIds);
     }).join("");
     attachToggleHandlers();
     attachSaveHandlers(pickData, state.savedIds, onSaveChange);
