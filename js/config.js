@@ -10,7 +10,7 @@ const CONFIG = {
   },
   app: {
     name: "-110", tagline: "Sharp picks. No noise.",
-    baseUrl: "https://n0nam3-bot.github.io/-110", version: "1.0.7"
+    baseUrl: "https://n0nam3-bot.github.io/-110", version: "1.1.0"
   },
   cache: {
     odds: 15*60*1000, picks: 30*60*1000,
@@ -37,7 +37,8 @@ const CONFIG = {
   llm: {
     gemini:     { endpoint:(k)=>`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${k}`, model:"gemini-2.0-flash-lite" },
     groq:       { endpoint:"https://api.groq.com/openai/v1/chat/completions", model:"llama-3.3-70b-versatile", fallbackModel:"llama-3.1-8b-instant" },
-    openrouter: { endpoint:"https://openrouter.ai/api/v1/chat/completions",   models:["meta-llama/llama-3.2-3b-instruct:free","qwen/qwen-2.5-7b-instruct:free","google/gemma-3-4b-it:free"] }
+    openrouter: { endpoint:"https://openrouter.ai/api/v1/chat/completions",   models:["meta-llama/llama-3.2-3b-instruct:free","qwen/qwen-2.5-7b-instruct:free","google/gemma-3-4b-it:free"] },
+    ollama:     { defaultUrl:"http://localhost:11434", defaultModels:"llama3.2:3b,mistral:7b,gemma2:2b" }
   },
   grades: {
     S:{ minConfidence:8.5, minEdge:7.0, label:"S", color:"#b5f23d" },
@@ -51,5 +52,7 @@ const KEYS = {
   oddsApi:"_110_odds_api_key", gemini:"_110_gemini_key",
   groq:"_110_groq_key", openrouter:"_110_openrouter_key",
   balldontlie:"_110_balldontlie_key", sport:"_110_active_sport",
+  ollamaUrl:"_110_ollama_url", ollamaModels:"_110_ollama_models",
+  selectedSports:"_110_selected_sports",
   theme:"_110_theme", savedPicks:"_110_saved_picks"
 };

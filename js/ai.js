@@ -55,6 +55,41 @@ async function callOpenRouter(prompt, key, maxTokens = 2048) {
   return d.choices?.[0]?.message?.content || "";
 }
 
+
+// ─── Ollama (local) ──────────────────────────────────────────────────────────
+// Runs on http://localhost:11434 by default — no API key, no rate limits.
+// Requires Ollama installed: https://ollama.ai
+// HTTPS note: if the app is served over HTTPS, browsers block mixed-content
+// HTTP requests to localhost. Fix in Chrome: chrome://flags/#unsafely-treat-insecure-origin-as-secure
+async function callOllama(prompt, baseUrl, modelsStr, maxTokens = 2048) {
+  const url    = (baseUrl || CONFIG.llm.ollama.defaultUrl).replace(/\/$/, "");
+  const models = (modelsStr || CONFIG.llm.ollama.defaultModels).split(",").map(m => m.trim()).filter(Boolean);
+  for (const model of models) {
+    try {
+      const r = await fetch(`${url}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role:"system", content:"You are a sharp sports analytics AI. Return only valid JSON." },
+            { role:"user",   content: prompt }
+          ],
+          stream: false,
+          options: { temperature: 0.3, num_predict: maxTokens }
+        })
+      });
+      if (!r.ok) throw new Error(`ollama_${r.status}`);
+      const d = await r.json();
+      const text = d.message?.content || "";
+      if (text.trim()) return text;
+    } catch (e) {
+      console.warn(`Ollama model ${model} failed:`, e.message);
+    }
+  }
+  throw new Error("ollama_all_models_failed");
+}
+
 // ─── Global LLM serializer ────────────────────────────────────────────────────
 // Only ONE call is in-flight at a time. Each call waits for the previous to
 // finish, then pauses _LLM_GAP ms before starting — keeping all providers well
@@ -76,10 +111,14 @@ async function _callLLMDirect(prompt, { maxTokens = 2048 } = {}) {
   const geminiKey     = getUserKey("gemini");
   const groqKey       = getUserKey("groq");
   const openrouterKey = getUserKey("openrouter");
+  // Ollama is tried FIRST when configured — local, no rate limits
+  const ollamaUrl     = getUserKey("ollamaUrl") || CONFIG.llm.ollama.defaultUrl;
+  const ollamaModels  = getUserKey("ollamaModels");
   const providers = [
-    { name:"gemini",     fn:() => callGemini(prompt, geminiKey, maxTokens),         available:!!geminiKey },
-    { name:"groq",       fn:() => callGroq(prompt, groqKey, maxTokens),             available:!!groqKey },
-    { name:"openrouter", fn:() => callOpenRouter(prompt, openrouterKey, maxTokens), available:!!openrouterKey }
+    { name:"ollama",     fn:() => callOllama(prompt, ollamaUrl, ollamaModels, maxTokens),  available:!!ollamaModels },
+    { name:"gemini",     fn:() => callGemini(prompt, geminiKey, maxTokens),                available:!!geminiKey },
+    { name:"groq",       fn:() => callGroq(prompt, groqKey, maxTokens),                    available:!!groqKey },
+    { name:"openrouter", fn:() => callOpenRouter(prompt, openrouterKey, maxTokens),        available:!!openrouterKey }
   ].filter(p => p.available);
   if (!providers.length) throw new Error("NO_KEYS");
 
@@ -269,4 +308,4 @@ export async function analyzeProps(game, props, playerStats = {}) {
 }
 
 export function gradeColor(grade) { return CONFIG.grades[grade]?.color || "#aaa"; }
-export function hasKeys() { return !!(localStorage.getItem(KEYS.gemini) || localStorage.getItem(KEYS.groq) || localStorage.getItem(KEYS.openrouter)); }
+export function hasKeys() { return !!(localStorage.getItem(KEYS.gemini) || localStorage.getItem(KEYS.groq) || localStorage.getItem(KEYS.openrouter) || localStorage.getItem(KEYS.ollamaModels)); }
