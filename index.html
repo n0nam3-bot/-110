@@ -13,7 +13,7 @@
   <meta property="og:description" content="AI-powered best bets, props, and analysis. Free forever.">
   <meta property="og:type" content="website">
   <!-- System font stack used — no external font dependency -->
-  <link rel="stylesheet" href="css/style.css?v=1.0.7">
+  <link rel="stylesheet" href="css/style.css?v=1.1.0">
 </head>
 <body>
 
@@ -37,17 +37,20 @@
   </div>
 </nav>
 
-<!-- ── SPORT TABS ── -->
-<div id="sport-nav">
-  <div class="sport-tabs">
-    <button class="sport-tab" data-sport="nba">🏀 NBA</button>
-    <button class="sport-tab" data-sport="nfl">🏈 NFL</button>
-    <button class="sport-tab" data-sport="mlb">⚾ MLB</button>
-    <button class="sport-tab" data-sport="nhl">🏒 NHL</button>
-    <button class="sport-tab" data-sport="mma">🥊 MMA/UFC</button>
-    <button class="sport-tab" data-sport="ncaab">🏀 NCAAB</button>
-    <button class="sport-tab" data-sport="ncaaf">🏈 NCAAF</button>
-    <button class="sport-tab" data-sport="mls">⚽ MLS</button>
+<!-- ── SPORT FILTER + RUN ── -->
+<div id="sport-control">
+  <div class="container sport-control-inner">
+    <div class="sport-chips">
+      <button class="sport-chip" data-sport="nba"   type="button">🏀 NBA</button>
+      <button class="sport-chip" data-sport="mlb"   type="button">⚾ MLB</button>
+      <button class="sport-chip" data-sport="nhl"   type="button">🏒 NHL</button>
+      <button class="sport-chip" data-sport="nfl"   type="button">🏈 NFL</button>
+      <button class="sport-chip" data-sport="mma"   type="button">🥊 MMA</button>
+      <button class="sport-chip" data-sport="ncaab" type="button">🏀 NCAAB</button>
+      <button class="sport-chip" data-sport="ncaaf" type="button">🏈 NCAAF</button>
+      <button class="sport-chip" data-sport="mls"   type="button">⚽ MLS</button>
+    </div>
+    <button class="run-btn" id="btn-run" type="button">▶ Run Analysis</button>
   </div>
 </div>
 
@@ -86,10 +89,7 @@
 <!-- ── MAIN ── -->
 <div id="main">
   <div id="feed">
-    <div class="section-header">
-      <span class="section-title">Today's Games</span>
-    </div>
-    <div id="games-list"><!-- populated by app.js --></div>
+    <div id="results-area"><!-- populated by app.js --></div>
   </div>
 
   <aside id="sidebar">
@@ -189,6 +189,7 @@
     <div class="modal-body">
       <div class="settings-tabs">
         <button class="settings-tab active" data-tab="keys">API Keys</button>
+        <button class="settings-tab" data-tab="ollama">🦙 Local AI</button>
         <button class="settings-tab" data-tab="prefs">Preferences</button>
         <button class="settings-tab" data-tab="about">About</button>
       </div>
@@ -245,20 +246,44 @@
         </div>
       </div>
 
+      <!-- Local AI tab -->
+      <div class="settings-section" id="settings-ollama">
+        <p style="font-size:.75rem;color:var(--text2);margin-bottom:16px;line-height:1.6">
+          <strong style="color:var(--text)">Run AI locally — no API keys, no rate limits.</strong><br>
+          Requires <a href="https://ollama.ai" target="_blank">Ollama</a> installed and running on your machine.<br><br>
+          ⚠ <strong>HTTPS note:</strong> This site is HTTPS, but Ollama runs on HTTP. Browsers block mixed-content requests by default.
+          In Chrome, open <code style="font-size:.7rem">chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, add <code style="font-size:.7rem">http://localhost:11434</code>, and relaunch.
+          Works out-of-the-box if you run the app locally.
+        </p>
+        <div class="form-group">
+          <label class="form-label">🦙 Ollama Base URL</label>
+          <input class="form-input" type="text" id="key-ollamaUrl" placeholder="http://localhost:11434">
+          <div class="key-hint">Leave blank to use default (localhost:11434)</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">📋 Models (comma-separated)</label>
+          <input class="form-input" type="text" id="key-ollamaModels" placeholder="llama3.2:3b,mistral:7b">
+          <div class="key-hint">Rotate on failure. Pull with: <code>ollama pull llama3.2:3b</code></div>
+        </div>
+        <button class="nav-btn" id="btn-test-ollama" type="button" style="margin-top:4px">⚡ Test Connection</button>
+        <div id="ollama-test-result" style="margin-top:8px;font-size:.74rem"></div>
+      </div>
+
       <!-- Prefs tab -->
       <div class="settings-section" id="settings-prefs">
         <div class="form-group">
-          <label class="form-label">Default Sport</label>
-          <select class="form-input" id="pref-sport">
-            <option value="nba">🏀 NBA</option>
-            <option value="nfl">🏈 NFL</option>
-            <option value="mlb">⚾ MLB</option>
-            <option value="nhl">🏒 NHL</option>
-            <option value="mma">🥊 MMA/UFC</option>
-            <option value="ncaab">🏀 NCAAB</option>
-            <option value="ncaaf">🏈 NCAAF</option>
-            <option value="mls">⚽ MLS</option>
-          </select>
+          <label class="form-label">Preferred Sports</label>
+          <div class="sport-prefs-grid">
+            <label class="sport-pref-item"><input type="checkbox" class="sport-pref-check" value="nba"> 🏀 NBA</label>
+            <label class="sport-pref-item"><input type="checkbox" class="sport-pref-check" value="mlb"> ⚾ MLB</label>
+            <label class="sport-pref-item"><input type="checkbox" class="sport-pref-check" value="nhl"> 🏒 NHL</label>
+            <label class="sport-pref-item"><input type="checkbox" class="sport-pref-check" value="nfl"> 🏈 NFL</label>
+            <label class="sport-pref-item"><input type="checkbox" class="sport-pref-check" value="mma"> 🥊 MMA</label>
+            <label class="sport-pref-item"><input type="checkbox" class="sport-pref-check" value="ncaab"> 🏀 NCAAB</label>
+            <label class="sport-pref-item"><input type="checkbox" class="sport-pref-check" value="ncaaf"> 🏈 NCAAF</label>
+            <label class="sport-pref-item"><input type="checkbox" class="sport-pref-check" value="mls"> ⚽ MLS</label>
+          </div>
+          <div class="key-hint" style="margin-top:8px">These will be pre-selected every time you open the app.</div>
         </div>
       </div>
 
@@ -267,10 +292,10 @@
         <p style="font-size:.8rem;color:var(--text2);line-height:1.7">
           <strong style="color:var(--text)">-110</strong> is a free, open-source sports analytics tool.<br><br>
           Data: ESPN · Sleeper · Balldontlie · The-Odds-API · TheSportsDB<br>
-          AI: Gemini 1.5 Flash · Groq Llama 3.3 · OpenRouter<br><br>
+          AI: Gemini 2.0 Flash Lite · Groq Llama 3.3 · OpenRouter · Ollama (local)<br><br>
           Picks are for informational purposes only. Bet responsibly.
         </p>
-        <div style="margin-top:16px;font-size:.72rem;color:var(--text3)">v1.0.7 · github.com/n0nam3-bot/-110</div>
+        <div style="margin-top:16px;font-size:.72rem;color:var(--text3)">v1.1.0 · github.com/n0nam3-bot/-110</div>
       </div>
     </div>
     <div class="modal-footer">
@@ -328,8 +353,8 @@
 </div>
 
 <!-- ─── Scripts ─── -->
-<script src="js/config.js?v=1.0.7"></script>
-<script type="module" src="js/app.js?v=1.0.7"></script>
+<script src="js/config.js?v=1.1.0"></script>
+<script type="module" src="js/app.js?v=1.1.0"></script>
 <script>
   // Set today's date
   document.getElementById("today-date").textContent =
