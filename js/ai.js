@@ -96,6 +96,7 @@ async function callOllama(prompt, baseUrl, modelsStr, maxTokens = 2048) {
 // under their free-tier rate limits without any per-provider retry juggling.
 const _LLM_GAP = 4000; // 4 s gap keeps us at ≤15 req/min — well under all free-tier limits // ms minimum between successive calls
 let   _llmChain = Promise.resolve();
+export let lastProvider = ""; // tracks which provider succeeded last call
 
 function callLLM(prompt, opts = {}) {
   // Chain onto the previous call so requests are always sequential + spaced
@@ -126,7 +127,7 @@ async function _callLLMDirect(prompt, { maxTokens = 2048 } = {}) {
   for (const p of providers) {
     try {
       const text = await p.fn();
-      if (text?.trim()) return { text, provider: p.name };
+      if (text?.trim()) { lastProvider = p.name; return { text, provider: p.name }; }
     } catch (e) {
       console.warn(`LLM ${p.name} failed:`, e.message);
       // Brief pause between providers so a 429 on one doesn't immediately
@@ -144,7 +145,7 @@ async function _callLLMDirect(prompt, { maxTokens = 2048 } = {}) {
   for (const p of providers) {
     try {
       const text = await p.fn();
-      if (text?.trim()) return { text, provider: p.name };
+      if (text?.trim()) { lastProvider = p.name; return { text, provider: p.name }; }
     } catch (e) {
       console.warn(`LLM ${p.name} retry failed:`, e.message);
     }

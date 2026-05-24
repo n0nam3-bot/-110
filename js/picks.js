@@ -40,6 +40,9 @@ export async function getPicksForSport(games, onProgress) {
   }
 }
 
+// Exported for global batch queue — caller handles slicing
+export async function getPicksForBatch(games, onProgress) { return _batchAnalyze(games, onProgress); }
+
 async function _batchAnalyze(games, onProgress) {
   onProgress?.("Fetching schedules, stats & props…", 0.15);
 

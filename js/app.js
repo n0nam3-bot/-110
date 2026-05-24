@@ -2,8 +2,8 @@ import { initFirebase, onUserChange, ensureUserDoc, getCurrentUser,
          loginGoogle, loginEmail, registerEmail, logout,
          getUserDoc, saveUserKeys, getUserKeys, syncUserKeysToLocalStorage,
          savePick, unsavePick, sendPasswordReset } from "./firebase.js";
-import { loadGamesForSport, getPicksForSport } from "./picks.js";
-import { hasKeys } from "./ai.js";
+import { loadGamesForSport, getPicksForSport, getPicksForBatch } from "./picks.js";
+import { hasKeys, lastProvider } from "./ai.js";
 import { renderGameCard, renderBestBetsSidebar, renderSavedSidebar,
          renderSummaryBar, attachSaveHandlers, attachToggleHandlers,
          renderSkeletons, toast, openModal, closeModal, closeAllModals } from "./ui.js";
@@ -144,22 +144,30 @@ function _lsSet(sk, date, games, pickData) {
 }
 
 // ─── Master progress bar ─────────────────────────────────────────────────────
-function _showMasterProgress(msg, pct) {
+function _showMasterProgress(msg, pct, mode = "analysis") {
   let bar = document.getElementById("master-progress");
   if (!bar) {
     bar = document.createElement("div");
     bar.id = "master-progress";
-    bar.className = "master-progress";
     const feed = document.getElementById("feed");
     feed?.insertAdjacentElement("afterbegin", bar);
   }
-  const pctInt = Math.round(pct * 100);
+  bar.className = `master-progress${mode === "cooldown" ? " cooldown" : ""}`;
+  const pctInt = Math.round(Math.max(0, Math.min(1, pct)) * 100);
   bar.innerHTML = `
     <div class="mp-row">
       <span class="mp-label">${msg}</span>
-      <span class="mp-pct">${pctInt}%</span>
+      <span class="mp-pct">${mode === "cooldown" ? "⏳ " : ""}${pctInt}%</span>
     </div>
     <div class="mp-track"><div class="mp-fill" style="width:${pctInt}%"></div></div>`;
+}
+
+// Counts down visually on the progress bar; skipped entirely for Ollama (no rate limits)
+async function _countdown(seconds, label) {
+  for (let s = seconds; s >= 0; s--) {
+    _showMasterProgress(`${label} — next batch in ${s}s`, s / seconds, "cooldown");
+    if (s > 0) await new Promise(r => setTimeout(r, 1000));
+  }
 }
 function _clearMasterProgress() {
   document.getElementById("master-progress")?.remove();
@@ -278,7 +286,20 @@ function _renderJumpNav() {
   });
 }
 
-// ─── Main run function ────────────────────────────────────────────────────────
+// ─── Main run function ───────────────────────────────────────────────────────
+//
+// Architecture:
+//  1. Fetch ALL sports' games in parallel (fast ESPN + odds calls, no LLM)
+//  2. Render EVERY game card immediately with live odds (users see everything)
+//  3. Build a single global queue of all games across all sports
+//  4. Process the queue in batches of BATCH_SIZE through the LLM
+//  5. Between batches: cooldown timer so free-tier rate limits reset
+//     – Ollama users get 0s cooldown (local, no limits)
+//  6. Each batch result live-updates the relevant game cards in place
+//
+const BATCH_SIZE    = 8;   // games per LLM call — fits all free-tier token limits
+const COOLDOWN_SECS = 25;  // seconds between batches for cloud providers
+
 async function runAnalysis() {
   if (state.running) return;
   if (!hasKeys()) {
@@ -286,18 +307,14 @@ async function runAnalysis() {
     openModal("modal-settings");
     return;
   }
-
   const sports = state.selectedSports.filter(sk => CONFIG.sports[sk]);
-  if (!sports.length) {
-    toast("Select at least one sport above", "error");
-    return;
-  }
+  if (!sports.length) { toast("Select at least one sport above", "error"); return; }
 
   state.running = true;
   const btn = document.getElementById("btn-run");
   if (btn) { btn.textContent = "⏳ Analyzing…"; btn.disabled = true; }
 
-  // Clear previous results and state
+  // Reset everything
   document.getElementById("results-area").innerHTML = "";
   document.getElementById("sport-jump-nav")?.remove();
   state.games    = {};
@@ -306,73 +323,137 @@ async function runAnalysis() {
     const el = document.getElementById(id); if (el) el.textContent = "–";
   });
 
-  const total = sports.length;
-  let completed = 0;
+  // ── Phase 1: Fetch ALL games for every sport in parallel ─────────────────
+  _showMasterProgress("Fetching all schedules & odds…", 0.02);
 
-  _showMasterProgress("Starting…", 0);
-
-  for (const sk of sports) {
-    const s = CONFIG.sports[sk];
-
-    // Memory cache hit
-    const memCached = _sportCache[sk];
-    if (memCached?.loadedAt && (Date.now() - memCached.loadedAt) < CONFIG.cache.picks) {
-      state.games[sk]    = memCached.games;
-      state.pickData[sk] = memCached.pickData;
-      _renderSportSection(sk, memCached.games, memCached.pickData);
-      completed++;
-      _showMasterProgress(`${s.emoji} ${s.label} — from cache`, completed / total);
-      continue;
-    }
-
-    // localStorage hit
-    const lsCached = _lsGet(sk, state.activeDate);
-    if (lsCached) {
-      _sportCache[sk]    = { ...lsCached };
-      state.games[sk]    = lsCached.games;
-      state.pickData[sk] = lsCached.pickData;
-      _renderSportSection(sk, lsCached.games, lsCached.pickData);
-      completed++;
-      _showMasterProgress(`${s.emoji} ${s.label} — from cache`, completed / total);
-      continue;
-    }
-
-    // Fresh fetch + analysis
+  await Promise.all(sports.map(async sk => {
     try {
-      const promise = _fetchAndAnalyzeSport(sk, state.activeDate, (msg, pct) => {
-        _showMasterProgress(
-          `${s.emoji} ${s.label} — ${msg}  (${completed + 1} of ${total})`,
-          (completed + pct) / total
-        );
-      });
-      _sportLoading[sk] = promise;
-      promise.finally(() => { delete _sportLoading[sk]; });
-      await promise;
-    } catch (e) {
-      console.error(`${sk}:`, e.message);
-      let section = document.getElementById(`sport-section-${sk}`);
-      if (!section) {
-        section = document.createElement("div");
-        section.id = `sport-section-${sk}`;
-        section.className = "sport-section";
-        document.getElementById("results-area").appendChild(section);
+      // Check memory/localStorage cache first
+      const memCached = _sportCache[sk];
+      if (memCached?.loadedAt && (Date.now() - memCached.loadedAt) < CONFIG.cache.picks) {
+        state.games[sk]    = memCached.games;
+        state.pickData[sk] = memCached.pickData;
+        _renderSportSection(sk, memCached.games, memCached.pickData, true);
+        return;
       }
-      section.innerHTML = `
-        <div class="sport-section-header">
-          <span class="sport-section-title">${s.emoji} ${s.label}</span>
-          <span class="sport-section-badge empty">Failed</span>
-        </div>
-        <div class="empty-state" style="padding:20px">
-          <div class="icon">⚠</div>
-          <div class="title">Analysis failed</div>
-          <div class="desc">${e.message}</div>
-        </div>`;
+      const lsCached = _lsGet(sk, state.activeDate);
+      if (lsCached) {
+        _sportCache[sk]    = { ...lsCached };
+        state.games[sk]    = lsCached.games;
+        state.pickData[sk] = lsCached.pickData;
+        _renderSportSection(sk, lsCached.games, lsCached.pickData, true);
+        return;
+      }
+      const games = await loadGamesForSport(sk, state.activeDate);
+      state.games[sk]    = games;
+      state.pickData[sk] = [];
+      // Render all cards immediately with odds (spinner = pending analysis)
+      _renderSportSection(sk, games, [], false);
+    } catch (e) {
+      console.warn(`${sk} fetch failed:`, e.message);
+      state.games[sk]    = [];
+      state.pickData[sk] = [];
     }
+  }));
 
-    completed++;
+  // Scroll to top of results
+  document.getElementById("results-area")?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  // Check if any sport loaded from cache — those don't need analysis
+  const sportsNeedingAnalysis = sports.filter(sk => {
+    const cached = _sportCache[sk];
+    return !(cached?.loadedAt && (Date.now() - cached.loadedAt) < CONFIG.cache.picks) &&
+           !_lsGet(sk, state.activeDate) &&
+           (state.games[sk] || []).length > 0;
+  });
+
+  if (!sportsNeedingAnalysis.length) {
+    // Everything was cached — done instantly
+    _showMasterProgress("✓ Loaded from cache", 1.0);
+    setTimeout(() => _clearMasterProgress(), 2000);
+    _updateAggregateSidebar();
+    if (btn) { btn.textContent = "↻ Refresh Analysis"; btn.disabled = false; }
+    state.running = false;
+    return;
   }
 
-  _showMasterProgress("✓ Analysis complete!", 1.0);
+  // ── Phase 2: Build global game queue from sports that need fresh analysis ──
+  const gameQueue = sportsNeedingAnalysis.flatMap(sk =>
+    (state.games[sk] || []).map(g => ({ ...g, _sk: sk }))
+  );
+
+  const totalGames   = gameQueue.length;
+  const totalBatches = Math.ceil(totalGames / BATCH_SIZE);
+
+  // ── Phase 3: Process batches with countdown between them ─────────────────
+  for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
+    const start = batchIdx * BATCH_SIZE;
+    const batch = gameQueue.slice(start, start + BATCH_SIZE);
+    const end   = start + batch.length;
+
+    // Cooldown before batch 2+ (skip for Ollama — no rate limits)
+    if (batchIdx > 0 && lastProvider !== "ollama") {
+      await _countdown(COOLDOWN_SECS,
+        `Rate-limit cooldown (batch ${batchIdx + 1}/${totalBatches})`);
+    }
+
+    _showMasterProgress(
+      `Batch ${batchIdx + 1} of ${totalBatches} — analyzing games ${start + 1}–${end} of ${totalGames}`,
+      (start / totalGames) * 0.95 + 0.03,
+      "analysis"
+    );
+
+    try {
+      const batchPicks = await getPicksForBatch(batch, (msg, pct) => {
+        const overall = ((start + pct * batch.length) / totalGames) * 0.95 + 0.03;
+        _showMasterProgress(
+          `Batch ${batchIdx + 1}/${totalBatches}: ${msg}`,
+          overall, "analysis"
+        );
+      });
+
+      // Distribute results back to their sport buckets
+      for (const pd of batchPicks) {
+        const qg = gameQueue.find(g => String(g.id) === String(pd.gameId));
+        const sk = qg?._sk;
+        if (sk) {
+          state.pickData[sk] = [...(state.pickData[sk] || []), pd];
+        }
+      }
+
+      // Live-update every affected sport section
+      const affectedSports = [...new Set(batch.map(g => g._sk))];
+      for (const sk of affectedSports) {
+        _refreshSportCards(sk, gameQueue);
+        attachSaveHandlers(state.pickData[sk] || [], state.savedIds, onSaveChange);
+      }
+
+      // Update aggregate sidebar after each batch
+      _updateAggregateSidebar();
+
+    } catch (e) {
+      console.warn(`Batch ${batchIdx + 1} failed:`, e.message);
+      // Mark affected games as errored
+      const affectedSports = [...new Set(batch.map(g => g._sk))];
+      for (const sk of affectedSports) {
+        const errPicks = batch
+          .filter(g => g._sk === sk)
+          .map(g => ({ gameId: g.id, game: g, allPicks: [], bestBet: null, error: e.message }));
+        state.pickData[sk] = [...(state.pickData[sk] || []), ...errPicks];
+        _refreshSportCards(sk, gameQueue);
+      }
+    }
+  }
+
+  // ── Phase 4: Persist everything to cache ─────────────────────────────────
+  for (const sk of sportsNeedingAnalysis) {
+    const games    = state.games[sk]    || [];
+    const pickData = state.pickData[sk] || [];
+    _sportCache[sk] = { games, pickData, loadedAt: Date.now() };
+    _lsSet(sk, state.activeDate, games, pickData);
+  }
+
+  _showMasterProgress("✓ All games analyzed!", 1.0);
   setTimeout(() => _clearMasterProgress(), 3000);
   _updateAggregateSidebar();
 
@@ -380,85 +461,27 @@ async function runAnalysis() {
   state.running = false;
 }
 
-// ─── Per-sport fetch + analyze ────────────────────────────────────────────────
-async function _fetchAndAnalyzeSport(sportKey, date, onProgress) {
-  const s = CONFIG.sports[sportKey];
-
-  onProgress?.("Fetching schedules & odds…", 0.05);
-  const games = await loadGamesForSport(sportKey, date);
-
-  // Show ALL fetched games; only run AI on the first ANALYSIS_CAP to stay within token limits
-  const ANALYSIS_CAP  = 8;
-  const analysisGames = games.slice(0, ANALYSIS_CAP);   // LLM analyzes these
-  const displayGames  = games;                           // all shown to user
-
-  // Create/update section immediately
-  let section = document.getElementById(`sport-section-${sportKey}`);
-  if (!section) {
-    section = document.createElement("div");
-    section.id = `sport-section-${sportKey}`;
-    section.className = "sport-section";
-    document.getElementById("results-area").appendChild(section);
-  }
-
-  if (!displayGames.length) {
-    const dateLabel = date
-      ? new Date(date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3"))
-          .toLocaleDateString("en-US", { weekday:"long", month:"long", day:"numeric" })
-      : "today";
-    section.innerHTML = `
-      <div class="sport-section-header">
-        <span class="sport-section-title">${s.emoji} ${s.label}</span>
-        <span class="sport-section-badge empty">No games</span>
-      </div>
-      <div class="empty-state" style="padding:20px">
-        <div class="icon">${s.emoji}</div>
-        <div class="title">No pre-game events</div>
-        <div class="desc">No upcoming ${s.label} games for ${dateLabel}.</div>
-      </div>`;
-    _sportCache[sportKey] = { games: [], pickData: [], loadedAt: Date.now() };
-    state.games[sportKey]    = [];
-    state.pickData[sportKey] = [];
-    return;
-  }
-
-  // Show ALL game cards immediately — games beyond analysis cap show "odds only"
-  section.innerHTML = `
-    <div class="sport-section-header" id="anchor-${sportKey}">
-      <span class="sport-section-title">${s.emoji} ${s.label}</span>
-      <span class="sport-section-badge">${displayGames.length} game${displayGames.length !== 1 ? "s" : ""}</span>
-    </div>
-    <div class="sport-section-games" id="sport-games-${sportKey}">
-      ${displayGames.map((g, idx) => {
-        const placeholder = idx < ANALYSIS_CAP ? null : { allPicks:[], bestBet:null, noAnalysis:true };
-        return renderGameCard(g, placeholder, state.savedIds);
-      }).join("")}
-    </div>`;
-  attachToggleHandlers();
-
-  // Run combined batch analysis on first ANALYSIS_CAP games
-  const pickData = await getPicksForSport(analysisGames, (msg, pct) => {
-    onProgress?.(msg, 0.12 + pct * 0.83);
-  });
-
-  // Re-render all cards: picks for analyzed games, odds-only for the rest
+// Refresh individual game cards inside a sport section after new picks arrive.
+// Only touches cards whose data has changed — no full section re-render.
+function _refreshSportCards(sportKey, fullQueue) {
   const gamesEl = document.getElementById(`sport-games-${sportKey}`);
-  if (gamesEl) {
-    gamesEl.innerHTML = displayGames.map((g, idx) => {
-      const pd       = pickData.find(pd => pd.gameId === g.id) || null;
-      const fallback = idx >= ANALYSIS_CAP ? { allPicks:[], bestBet:null, noAnalysis:true } : null;
-      return renderGameCard(g, pd || fallback, state.savedIds);
-    }).join("");
-    attachToggleHandlers();
-    attachSaveHandlers(pickData, state.savedIds, onSaveChange);
-  }
+  if (!gamesEl) return;
 
-  _sportCache[sportKey] = { games, pickData, loadedAt: Date.now() };
-  state.games[sportKey]    = games;
-  state.pickData[sportKey] = pickData;
+  const games    = state.games[sportKey]    || [];
+  const pickData = state.pickData[sportKey] || [];
 
-  _lsSet(sportKey, date, games, pickData);
-  onProgress?.("Done", 1.0);
+  // Which game IDs are queued for analysis (but not yet done)?
+  const queuedIds = new Set(fullQueue.filter(g => g._sk === sportKey).map(g => String(g.id)));
+
+  gamesEl.innerHTML = games.map(g => {
+    const pd = pickData.find(pd => String(pd.gameId) === String(g.id)) || null;
+    // Still queued for analysis → show spinner (null)
+    // Not in queue and no picks → odds only
+    const fallback = queuedIds.has(String(g.id)) ? null : { allPicks:[], bestBet:null, noAnalysis:true };
+    return renderGameCard(g, pd || fallback, state.savedIds);
+  }).join("");
+
+  attachToggleHandlers();
 }
 
 // ─── 30-min auto-refresh ──────────────────────────────────────────────────────
