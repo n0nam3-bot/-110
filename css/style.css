@@ -1039,13 +1039,6 @@ button { cursor: pointer; font-family: inherit; border: none; }
   border-radius: 3px;
   transition: width .5s ease;
 }
-/* Cooldown phase — amber bar so users know it's a deliberate pause */
-.master-progress.mp-cooldown .mp-fill {
-  background: #f5a623;
-}
-.master-progress.mp-cooldown .mp-pct {
-  color: #f5a623;
-}
 
 /* ═══════════════════════════════════════════════════════════
    SPORT SECTIONS (stacked single-page layout)
