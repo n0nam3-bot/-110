@@ -928,3 +928,249 @@ button { cursor: pointer; font-family: inherit; border: none; }
   color: var(--text2, #888);
   letter-spacing: .02em;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   SPORT FILTER BAR + RUN BUTTON
+═══════════════════════════════════════════════════════════ */
+#sport-control {
+  background: var(--bg2, #111);
+  border-bottom: 1px solid var(--border, #222);
+  position: sticky;
+  top: 0;
+  z-index: 90;
+}
+.sport-control-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  flex-wrap: wrap;
+}
+.sport-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+}
+.sport-chip {
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border, #333);
+  background: transparent;
+  color: var(--text2, #888);
+  font-size: .72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s ease;
+  white-space: nowrap;
+}
+.sport-chip:hover {
+  border-color: var(--accent, #b5f23d);
+  color: var(--accent, #b5f23d);
+}
+.sport-chip.active {
+  background: var(--accent, #b5f23d);
+  border-color: var(--accent, #b5f23d);
+  color: #0a0a0a;
+}
+
+/* Run Analysis button */
+.run-btn {
+  padding: 9px 22px;
+  border-radius: 8px;
+  background: var(--accent, #b5f23d);
+  color: #0a0a0a;
+  border: none;
+  font-size: .82rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity .15s, transform .1s;
+  flex-shrink: 0;
+}
+.run-btn:hover  { opacity: .88; }
+.run-btn:active { transform: scale(.97); }
+.run-btn:disabled {
+  background: var(--border, #333);
+  color: var(--text3, #555);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MASTER PROGRESS BAR
+═══════════════════════════════════════════════════════════ */
+.master-progress {
+  background: var(--card, #141414);
+  border: 1px solid var(--border, #222);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+}
+.mp-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 7px;
+}
+.mp-label {
+  font-size: .74rem;
+  color: var(--text2, #888);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mp-pct {
+  font-size: .74rem;
+  font-weight: 700;
+  color: var(--accent, #b5f23d);
+  margin-left: 12px;
+}
+.mp-track {
+  height: 5px;
+  background: rgba(255,255,255,.07);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.mp-fill {
+  height: 100%;
+  background: var(--accent, #b5f23d);
+  border-radius: 3px;
+  transition: width .5s ease;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SPORT SECTIONS (stacked single-page layout)
+═══════════════════════════════════════════════════════════ */
+.sport-section {
+  margin-bottom: 32px;
+}
+.sport-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0 10px;
+  border-bottom: 2px solid var(--accent, #b5f23d);
+  margin-bottom: 14px;
+  scroll-margin-top: 110px; /* offset for sticky bars */
+}
+.sport-section-title {
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--text, #f0f0f0);
+  letter-spacing: -.01em;
+}
+.sport-section-badge {
+  margin-left: auto;
+  font-size: .68rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 12px;
+  background: rgba(181,242,61,.15);
+  color: var(--accent, #b5f23d);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.sport-section-badge.empty {
+  background: rgba(255,255,255,.05);
+  color: var(--text3, #555);
+}
+.sport-section-games {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SPORT JUMP NAV (appears after analysis runs)
+═══════════════════════════════════════════════════════════ */
+.sport-jump-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 0 14px;
+}
+.jump-link {
+  font-size: .70rem;
+  font-weight: 600;
+  color: var(--text2, #888);
+  text-decoration: none;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #333);
+  transition: all .15s;
+}
+.jump-link:hover {
+  color: var(--accent, #b5f23d);
+  border-color: var(--accent, #b5f23d);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   LANDING HINT (shown before first run)
+═══════════════════════════════════════════════════════════ */
+.landing-hint {
+  text-align: center;
+  padding: 56px 24px;
+  color: var(--text2, #888);
+}
+.landing-icon { font-size: 2.8rem; margin-bottom: 14px; }
+.landing-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text, #f0f0f0);
+  margin-bottom: 10px;
+}
+.landing-desc {
+  font-size: .84rem;
+  line-height: 1.6;
+  max-width: 380px;
+  margin: 0 auto;
+}
+.landing-desc strong { color: var(--accent, #b5f23d); }
+
+/* ═══════════════════════════════════════════════════════════
+   SETTINGS — SPORT PREFERENCE CHECKBOXES
+═══════════════════════════════════════════════════════════ */
+.sport-prefs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.sport-pref-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: .8rem;
+  color: var(--text, #f0f0f0);
+  cursor: pointer;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border, #333);
+  transition: all .15s;
+  user-select: none;
+}
+.sport-pref-item:hover { border-color: var(--accent, #b5f23d); }
+.sport-pref-item input[type="checkbox"] {
+  accent-color: var(--accent, #b5f23d);
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.sport-pref-item:has(input:checked) {
+  background: rgba(181,242,61,.08);
+  border-color: var(--accent, #b5f23d);
+  color: var(--accent, #b5f23d);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MOBILE ADJUSTMENTS
+═══════════════════════════════════════════════════════════ */
+@media (max-width: 600px) {
+  .sport-control-inner { padding: 8px 12px; gap: 8px; }
+  .sport-chip { font-size: .68rem; padding: 4px 10px; }
+  .run-btn { font-size: .78rem; padding: 8px 16px; }
+  .sport-section-title { font-size: .9rem; }
+  .sport-prefs-grid { grid-template-columns: repeat(2, 1fr); }
+}
