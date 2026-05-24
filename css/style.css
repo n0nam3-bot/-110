@@ -1174,3 +1174,16 @@ button { cursor: pointer; font-family: inherit; border: none; }
   .sport-section-title { font-size: .9rem; }
   .sport-prefs-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ── Cooldown state for master progress bar ───────────────────────────────── */
+/* Amber colour + linear transition so the drain feels like a real timer       */
+.master-progress.cooldown .mp-fill {
+  background: #f5a623;
+  transition: width 1.05s linear;
+}
+.master-progress.cooldown .mp-pct {
+  color: #f5a623;
+}
+.master-progress.cooldown .mp-label {
+  color: var(--text, #f0f0f0);
+}
