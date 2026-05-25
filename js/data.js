@@ -145,24 +145,32 @@ export async function getESPNGames(sportKey, date = null) {
   // Pre-game only — live games skew odds against bettors
   let pregame = games.filter(g => !g.completed && !g.live);
 
-  // ── Strict date validation ────────────────────────────────────────────────
-  // ESPN sometimes returns "next available" games even when the queried date
-  // has none (e.g. NFL in the off-season).  Filter to only events whose
-  // local-timezone date matches what the user actually selected.
-  if (date && pregame.length) {
-    const targetDate = `${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}`;
-    const validated = pregame.filter(g => {
+  // ── Date validation — always runs, UTC-window based ──────────────────────
+  // Problems with the old local-timezone approach:
+  //   1. Skipped entirely when date=null (today), letting postponed games bleed in
+  //   2. Local timezone varies per machine — a 9 PM ET game is 1 AM UTC (next day),
+  //      so non-ET browsers saw it as tomorrow and dropped it
+  //
+  // Fix: use a 30-hour UTC window centred on the target date.
+  //   Window start = midnight UTC of target date − 6 h  (catches early UTC offset)
+  //   Window end   = midnight UTC of target date + 30 h (catches 9 PM ET = 1 AM UTC)
+  //   Off-season games (weeks away) are always outside the window.
+  //   Postponed games still carrying yesterday's original date fall before the window.
+  {
+    // Default to today when no explicit date was passed
+    const raw = date || new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const y = parseInt(raw.slice(0, 4), 10);
+    const m = parseInt(raw.slice(4, 6), 10) - 1;  // 0-indexed
+    const d = parseInt(raw.slice(6, 8), 10);
+    const midnightUTC = Date.UTC(y, m, d);
+    const windowStart = midnightUTC - 6  * 3_600_000; // 6 h before
+    const windowEnd   = midnightUTC + 30 * 3_600_000; // 30 h after
+
+    pregame = pregame.filter(g => {
       if (!g.date) return false;
-      const d = new Date(g.date);
-      // Use the browser's local timezone so a 10 PM ET game (= next-day UTC)
-      // still counts as today locally.
-      const localDate =
-        `${d.getFullYear()}-` +
-        `${String(d.getMonth() + 1).padStart(2, "0")}-` +
-        `${String(d.getDate()).padStart(2, "0")}`;
-      return localDate === targetDate;
+      const gMs = new Date(g.date).getTime();
+      return gMs >= windowStart && gMs < windowEnd;
     });
-    pregame = validated;
   }
 
   memSet(ck, pregame, CONFIG.cache.espn);
