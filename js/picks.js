@@ -178,8 +178,8 @@ export async function getPicksForGame(game, forceRefresh = false) {
 }
 
 export function formatOdds(price) {
-  if (!price && price !== 0) return "N/A";
   const n = Number(price);
+  if (!Number.isFinite(n)) return "N/A";
   return n > 0 ? `+${n}` : `${n}`;
 }
 
