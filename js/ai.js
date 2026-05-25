@@ -164,6 +164,220 @@ function parseJSON(text) {
   return null;
 }
 
+function safeNum(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function parseRecordPct(record) {
+  if (!record) return null;
+  const m = String(record).match(/(\d+)\s*-\s*(\d+)(?:\s*-\s*(\d+))?/);
+  if (!m) return null;
+  const wins = safeNum(m[1]);
+  const losses = safeNum(m[2]);
+  const pushes = safeNum(m[3]);
+  const games = wins + losses + pushes;
+  return games ? (wins + 0.5 * pushes) / games : null;
+}
+
+function recentAvgScore(schedule) {
+  const vals = (schedule || []).map(g => safeNum(g.score, NaN)).filter(n => Number.isFinite(n));
+  if (!vals.length) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+function gradeFrom(confidence, edge) {
+  if (confidence >= 8.5 && edge >= 7.0) return 'S';
+  if (confidence >= 7.0 && edge >= 5.0) return 'A';
+  if (confidence >= 5.5 && edge >= 3.0) return 'B';
+  return 'C';
+}
+
+function pickId(gameId, suffix) {
+  return `${String(gameId)}_${suffix}`;
+}
+
+function moneylineSelection(teamName, price) {
+  return `${teamName} ${price > 0 ? `+${price}` : price}`;
+}
+
+function spreadSelection(teamName, point) {
+  const p = safeNum(point, 0);
+  const sign = p > 0 ? '+' : '';
+  return `${teamName} ${sign}${p}`;
+}
+
+function totalSelection(direction, point) {
+  return `${direction} ${point}`;
+}
+
+function buildFreeGameAnalysis(game, context = {}) {
+  const { recentFormHome, recentFormAway, props, playerStats } = context;
+  const odds = game?.odds || null;
+  const gameId = game?.id ?? `${game?.sport || 'game'}_${Date.now()}`;
+
+  if (!odds?.moneyline && !odds?.spread && !odds?.total) {
+    return {
+      gameId,
+      summary: 'No live odds available for this game.',
+      picks: [],
+      props: [],
+      bestBet: null,
+      lean: 'none',
+      confidence: 0,
+      noValue: true,
+      provider: 'free',
+      analyzedAt: Date.now()
+    };
+  }
+
+  const homePrice = safeNum(odds.moneyline?.home?.price, 0);
+  const awayPrice = safeNum(odds.moneyline?.away?.price, 0);
+  const homeImp   = homePrice ? impliedProbability(homePrice) : 0;
+  const awayImp   = awayPrice ? impliedProbability(awayPrice) : 0;
+
+  const homeRec = parseRecordPct(game?.homeTeam?.record);
+  const awayRec = parseRecordPct(game?.awayTeam?.record);
+  const homeRecent = recentAvgScore(recentFormHome);
+  const awayRecent = recentAvgScore(recentFormAway);
+
+  const homeValue = (homeRec ?? homeImp) - homeImp + (((homeRecent ?? 0) - (awayRecent ?? 0)) / 100);
+  const awayValue = (awayRec ?? awayImp) - awayImp + (((awayRecent ?? 0) - (homeRecent ?? 0)) / 100);
+  const mlSide = homeValue === awayValue ? (homeImp >= awayImp ? 'home' : 'away') : (homeValue >= awayValue ? 'home' : 'away');
+  const mlTeam = mlSide === 'home' ? game.homeTeam : game.awayTeam;
+  const mlPrice = mlSide === 'home' ? homePrice : awayPrice;
+  const mlOppRec = mlSide === 'home' ? awayRec : homeRec;
+  const mlRec = mlSide === 'home' ? homeRec : awayRec;
+  const mlValue = Math.abs(homeValue - awayValue);
+  const mlConfidence = clamp(5.6 + mlValue * 18 + Math.abs((homeRecent ?? 0) - (awayRecent ?? 0)) / 25, 5.6, 8.4);
+  const mlEdge = clamp(3.0 + mlValue * 18, 3.0, 7.4);
+
+  const picks = [];
+  picks.push({
+    id: pickId(gameId, 'ml'),
+    type: 'moneyline',
+    selection: moneylineSelection(mlTeam.name, mlPrice),
+    odds: mlPrice > 0 ? `+${mlPrice}` : `${mlPrice}`,
+    confidence: Number(mlConfidence.toFixed(1)),
+    edge: Number(mlEdge.toFixed(1)),
+    grade: gradeFrom(mlConfidence, mlEdge),
+    reasoning: `${mlTeam.name} is priced at ${mlPrice > 0 ? `+${mlPrice}` : mlPrice} and the model is using the current record/form data ${mlRec != null ? `(${(mlRec * 100).toFixed(1)}% win rate)` : ''} versus the opponent ${mlOppRec != null ? `(${(mlOppRec * 100).toFixed(1)}% win rate)` : ''}.`
+  });
+
+  const spreadHome = odds.spread?.home;
+  const spreadAway = odds.spread?.away;
+  const spreadSide = mlSide === 'home' ? spreadHome : spreadAway;
+  const spreadTeam = mlSide === 'home' ? game.homeTeam : game.awayTeam;
+  if (spreadSide?.point !== undefined) {
+    const spreadGap = Math.abs(safeNum(spreadSide.point, 0));
+    const spreadConfidence = clamp(mlConfidence - 0.3 + spreadGap * 0.2, 5.4, 8.0);
+    const spreadEdge = clamp(mlEdge - 0.4 + spreadGap * 0.15, 3.0, 7.0);
+    picks.push({
+      id: pickId(gameId, 'sp'),
+      type: 'spread',
+      selection: spreadSelection(spreadTeam.name, safeNum(spreadSide.point, 0)),
+      odds: `${safeNum(spreadSide.price, 0) > 0 ? '+' : ''}${safeNum(spreadSide.price, 0)}`,
+      confidence: Number(spreadConfidence.toFixed(1)),
+      edge: Number(spreadEdge.toFixed(1)),
+      grade: gradeFrom(spreadConfidence, spreadEdge),
+      reasoning: `${spreadTeam.name} is the side aligned with the moneyline value and the spread is only ${safeNum(spreadSide.point, 0)} at ${safeNum(spreadSide.price, 0) > 0 ? `+${safeNum(spreadSide.price, 0)}` : safeNum(spreadSide.price, 0)}.`
+    });
+  }
+
+  const totalPoint = safeNum(odds.total?.over?.point, NaN);
+  if (Number.isFinite(totalPoint)) {
+    const totalBase = ((homeRecent ?? homeRec ?? 0) + (awayRecent ?? awayRec ?? 0)) / 2;
+    const direction = totalBase <= totalPoint / 2 ? 'Under' : 'Over';
+    const totalPrice = direction === 'Under' ? safeNum(odds.total?.under?.price, 0) : safeNum(odds.total?.over?.price, 0);
+    const totalConfidence = clamp(5.4 + Math.abs(totalBase - totalPoint / 2) * 0.35, 5.4, 7.8);
+    const totalEdge = clamp(3.0 + Math.abs(totalBase - totalPoint / 2) * 0.5, 3.0, 6.8);
+    picks.push({
+      id: pickId(gameId, 'tot'),
+      type: 'total',
+      selection: totalSelection(direction, totalPoint),
+      odds: `${totalPrice > 0 ? '+' : ''}${totalPrice}`,
+      confidence: Number(totalConfidence.toFixed(1)),
+      edge: Number(totalEdge.toFixed(1)),
+      grade: gradeFrom(totalConfidence, totalEdge),
+      reasoning: `The total is ${totalPoint}, and the recent scoring context points ${direction.toLowerCase()} based on the teams' latest score outputs.`
+    });
+  }
+
+  const propPicks = [];
+  if (Array.isArray(props) && props.length) {
+    const seenPlayers = new Set();
+    for (const p of props) {
+      if (!p?.player || seenPlayers.has(p.player)) continue;
+      seenPlayers.add(p.player);
+      const stat = playerStats?.[p.player];
+      if (!stat) continue;
+
+      const market = String(p.market || '').toLowerCase();
+      const point = safeNum(p.point, NaN);
+      if (!Number.isFinite(point)) continue;
+
+      let avg = null;
+      if (market.includes('points')) avg = safeNum(stat.pts, NaN);
+      else if (market.includes('rebounds')) avg = safeNum(stat.reb, NaN);
+      else if (market.includes('assists')) avg = safeNum(stat.ast, NaN);
+      else if (market.includes('blocks')) avg = safeNum(stat.blk, NaN);
+      else if (market.includes('steals')) avg = safeNum(stat.stl, NaN);
+
+      if (!Number.isFinite(avg)) continue;
+      const direction = avg >= point ? 'Over' : 'Under';
+      const gap = Math.abs(avg - point);
+      if (gap < point * 0.08) continue;
+
+      const conf = clamp(5.5 + gap * 0.55, 5.5, 7.5);
+      const edge = clamp(3.0 + gap * 0.65, 3.0, 6.5);
+      propPicks.push({
+        id: pickId(gameId, `prop_${p.player.replace(/\s+/g, '_').slice(0, 18)}`),
+        type: 'prop',
+        player: p.player,
+        team: p.team,
+        market: p.market,
+        marketLabel: p.marketLabel || p.market,
+        selection: `${p.player}${p.team ? ` (${p.team})` : ''} ${direction} ${point} ${p.marketLabel || ''}`.trim(),
+        odds: `${safeNum(p.price, 0) > 0 ? '+' : ''}${safeNum(p.price, 0)}`,
+        point,
+        direction: direction.toLowerCase(),
+        confidence: Number(conf.toFixed(1)),
+        edge: Number(edge.toFixed(1)),
+        grade: gradeFrom(conf, edge),
+        reasoning: `The player average ${avg.toFixed(1)} in the matching stat category versus a line of ${point}.`
+      });
+      if (propPicks.length >= 2) break;
+    }
+  }
+
+  const allSorted = [...picks, ...propPicks].sort((a, b) => {
+    const G = { S: 0, A: 1, B: 2, C: 3 };
+    return (G[a.grade] ?? 9) - (G[b.grade] ?? 9) || (b.confidence ?? 0) - (a.confidence ?? 0);
+  });
+  const bestBet = allSorted.find(p => p.grade === 'S' || p.grade === 'A') || null;
+
+  return {
+    gameId,
+    summary: `${game?.awayTeam?.name || 'Away'} @ ${game?.homeTeam?.name || 'Home'} using live odds and recent form only.`,
+    picks: allSorted.slice(0, 6),
+    props: propPicks,
+    bestBet,
+    lean: mlSide === 'home' ? 'home' : 'away',
+    confidence: Number(mlConfidence.toFixed(1)),
+    noValue: !bestBet && !allSorted.length,
+    provider: 'free',
+    analyzedAt: Date.now()
+  };
+}
+
+function buildFreeBatchResults(gamesWithContext) {
+  return (gamesWithContext || []).map(gc => buildFreeGameAnalysis(gc.game, gc));
+}
+
 // ─── Batch game prompt ────────────────────────────────────────────────────────
 // ─── Single combined batch prompt (games + props in ONE LLM call) ────────────
 // Merging both into one call halves the total requests per sport load and
@@ -240,90 +454,91 @@ Return ONLY a valid JSON array — no markdown, no preamble, no trailing text:
 // ─── Single combined export (replaces separate analyzeBatchGames + analyzeBatchProps) ──
 export async function analyzeCombinedBatch(gamesWithContext) {
   if (!gamesWithContext.length) return [];
+  const fallbackAll = buildFreeBatchResults(gamesWithContext);
+
   // 6 games × ~450 tokens each = ~2700 output tokens — fits Groq's 3k cap + has headroom
   // 650 tokens/game covers 5–7 picks + props per game without truncation
   const maxTokens = Math.min(5000, Math.max(2500, gamesWithContext.length * 650));
   const prompt    = buildCombinedBatchPrompt(gamesWithContext);
-  const { text, provider } = await callLLM(prompt, { maxTokens });
 
-  const clean = text.replace(/```json|```/g, "").trim();
-  let parsed  = null;
-  try { parsed = JSON.parse(clean); } catch {}
-  if (!Array.isArray(parsed)) {
-    const m = clean.match(/\[[\s\S]*\]/);
-    if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
-  }
-  if (!Array.isArray(parsed)) {
-    console.warn("Combined batch parse failed — raw:", clean.slice(0, 300));
-    throw new Error("BATCH_PARSE_FAILED");
-  }
+  try {
+    const { text, provider } = await callLLM(prompt, { maxTokens });
 
-  // Grade sort order (lower number = higher priority)
-  const GRADE = { S:0, A:1, B:2, C:3 };
+    const clean = text.replace(/```json|```/g, "").trim();
+    let parsed  = null;
+    try { parsed = JSON.parse(clean); } catch {}
+    if (!Array.isArray(parsed)) {
+      const m = clean.match(/\[[\s\S]*\]/);
+      if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+    }
+    if (!Array.isArray(parsed)) throw new Error("BATCH_PARSE_FAILED");
 
-  // Deduplicate picks: same selection + same odds = exact duplicate (prop in both picks[] and props[])
-  function dedupe(picks) {
-    const seen = new Set();
-    return picks.filter(p => {
-      const key = `${(p.selection||"").toLowerCase().trim()}|${p.odds}|${p.type}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+    const GRADE = { S:0, A:1, B:2, C:3 };
+
+    function dedupe(picks) {
+      const seen = new Set();
+      return picks.filter(p => {
+        const key = `${(p.selection||"").toLowerCase().trim()}|${p.odds}|${p.type}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    function fixSelection(pick, gc) {
+      if (!gc?.game?.odds || !pick?.selection) return pick;
+      const odds = gc.game.odds;
+      if (pick.type === "spread" && !/[+-]?\d+\.?\d/.test(pick.selection)) {
+        const nameWords = pick.selection.toLowerCase().split(" ");
+        const homeLast  = gc.game.homeTeam.name.toLowerCase().split(" ").pop();
+        const isHome    = nameWords.some(w => w.startsWith(homeLast.slice(0, 4)));
+        const sp        = isHome ? odds.spread?.home : odds.spread?.away;
+        if (sp?.point !== undefined) {
+          const sign = sp.point >= 0 ? "+" : "";
+          pick.selection = `${pick.selection.trim()} ${sign}${sp.point}`;
+        }
+      }
+      if (pick.type === "total" && !/\d+\.?\d/.test(pick.selection)) {
+        const pt = odds.total?.over?.point;
+        if (pt !== undefined) {
+          const dir = /under/i.test(pick.selection) ? "Under" : "Over";
+          pick.selection = `${dir} ${pt}`;
+        }
+      }
+      return pick;
+    }
+
+    const merged = parsed.map(result => {
+      const gc = gamesWithContext.find(g => String(g.game.id) === String(result.gameId));
+      if (!gc) return result;
+
+      (result.picks || []).forEach(p => fixSelection(p, gc));
+      (result.props || []).forEach(p => fixSelection(p, gc));
+
+      const gamePicks = (result.picks || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
+      const propPicks = (result.props || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
+      const allSorted = dedupe([...gamePicks, ...propPicks]).sort(
+        (a, b) => (GRADE[a.grade] ?? 9) - (GRADE[b.grade] ?? 9) || (b.confidence ?? 0) - (a.confidence ?? 0)
+      );
+
+      const bestCandidate = allSorted.find(p => p.grade === "S" || p.grade === "A") || null;
+      return {
+        ...result,
+        picks: allSorted.slice(0, 12),
+        props: propPicks,
+        bestBet: bestCandidate,
+        noValue: !bestCandidate && !allSorted.length,
+        provider,
+        analyzedAt: Date.now()
+      };
     });
+
+    const byId = new Map(merged.map(r => [String(r.gameId), r]));
+    return gamesWithContext.map(gc => byId.get(String(gc.game.id)) || fallbackAll.find(r => String(r.gameId) === String(gc.game.id)));
+  } catch (e) {
+    console.warn("Combined batch failed; using free fallback:", e.message);
+    return fallbackAll;
   }
-
-  // Fix spread/total selections that are missing the point value
-  function fixSelection(pick, gc) {
-    if (!gc?.game?.odds || !pick?.selection) return pick;
-    const odds = gc.game.odds;
-    if (pick.type === "spread" && !/[+-]?\d+\.?\d/.test(pick.selection)) {
-      const nameWords = pick.selection.toLowerCase().split(" ");
-      const homeLast  = gc.game.homeTeam.name.toLowerCase().split(" ").pop();
-      const isHome    = nameWords.some(w => w.startsWith(homeLast.slice(0, 4)));
-      const sp        = isHome ? odds.spread?.home : odds.spread?.away;
-      if (sp?.point !== undefined) {
-        const sign = sp.point >= 0 ? "+" : "";
-        pick.selection = `${pick.selection.trim()} ${sign}${sp.point}`;
-      }
-    }
-    if (pick.type === "total" && !/\d+\.?\d/.test(pick.selection)) {
-      const pt = odds.total?.over?.point;
-      if (pt !== undefined) {
-        const dir = /under/i.test(pick.selection) ? "Under" : "Over";
-        pick.selection = `${dir} ${pt}`;
-      }
-    }
-    return pick;
-  }
-
-  return parsed.map(result => {
-    // Find matching game context for spread/total fixes
-    const gc = gamesWithContext.find(g => String(g.game.id) === String(result.gameId));
-
-    // Fix any missing point values before filtering
-    (result.picks || []).forEach(p => fixSelection(p, gc));
-    (result.props || []).forEach(p => fixSelection(p, gc));
-
-    // Lower threshold slightly so more picks survive (LLM sometimes undershoots grades)
-    const gamePicks = (result.picks || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
-    const propPicks = (result.props || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
-
-    // Merge, deduplicate, then sort S → A → B → C (then by confidence within same grade)
-    const allSorted = dedupe([...gamePicks, ...propPicks]).sort(
-      (a, b) => (GRADE[a.grade] ?? 9) - (GRADE[b.grade] ?? 9) || (b.confidence ?? 0) - (a.confidence ?? 0)
-    );
-
-    result.picks = allSorted.slice(0, 12); // top 12 deduplicated picks across game + props
-    result.props = propPicks;              // keep props separately for compatibility
-
-    // Force bestBet = highest-graded pick (must be S or A — never B)
-    // This overrides whatever the LLM chose to guarantee grade accuracy
-    const bestCandidate = allSorted.find(p => p.grade === "S" || p.grade === "A");
-    result.bestBet = bestCandidate || null;
-    if (!result.bestBet) { result.noValue = true; }
-
-    return { ...result, provider, analyzedAt: Date.now() };
-  });
 }
 
 // Legacy exports kept for the sequential fallback path
@@ -345,29 +560,43 @@ function buildGamePrompt(game, teamStatsHome, teamStatsAway, injuryData, recentF
 
 export async function analyzeGame(game, context = {}) {
   const { teamStatsHome, teamStatsAway, injuryData, recentFormHome, recentFormAway } = context;
-  const prompt = buildGamePrompt(game, teamStatsHome, teamStatsAway, injuryData, recentFormHome, recentFormAway);
-  const { text, provider } = await callLLM(prompt);
-  const parsed = parseJSON(text);
-  if (!parsed) throw new Error("PARSE_FAILED");
-  parsed.picks = (parsed.picks || []).filter(p => p.confidence >= 5.5 && p.edge >= 3.0).slice(0, 6);
-  if (parsed.bestBet?.confidence < CONFIG.bestBet.minConfidence) { parsed.bestBet = null; parsed.noValue = true; }
-  return { ...parsed, provider, analyzedAt: Date.now() };
+  try {
+    const prompt = buildGamePrompt(game, teamStatsHome, teamStatsAway, injuryData, recentFormHome, recentFormAway);
+    const { text, provider } = await callLLM(prompt);
+    const parsed = parseJSON(text);
+    if (!parsed) throw new Error("PARSE_FAILED");
+    parsed.picks = (parsed.picks || []).filter(p => p.confidence >= 5.5 && p.edge >= 3.0).slice(0, 6);
+    if (parsed.bestBet?.confidence < CONFIG.bestBet.minConfidence) { parsed.bestBet = null; parsed.noValue = true; }
+    return { ...parsed, provider, analyzedAt: Date.now() };
+  } catch (e) {
+    return buildFreeGameAnalysis(game, context);
+  }
 }
 
 export async function analyzeProps(game, props, playerStats = {}) {
   if (!props?.length) return { props: [] };
-  const grouped = props.reduce((acc, p) => { (acc[p.player] = acc[p.player] || []).push(p); return acc; }, {});
-  const propStr = Object.entries(grouped).slice(0, 20).map(([player, lines]) => {
-    const stat = playerStats?.[player];
-    const avg  = stat ? ` (avg:${stat.pts ? `${stat.pts}pts ` : ""}${stat.reb ? `${stat.reb}reb ` : ""}${stat.ast ? `${stat.ast}ast` : ""})` : "";
-    return `${player}${avg}: ${lines[0].market} ${lines[0].point} (${lines[0].price})`;
-  }).join("\n");
-  const prompt = `Grade player props for ${game.awayTeam.name} @ ${game.homeTeam.name}. Return ONLY JSON.\n\n${propStr}\n\n{"props":[{"id":"p1","type":"prop","player":"Full Name","team":"ABR","market":"player_points","marketLabel":"Points","selection":"Full Name (ABR) Over 24.5 Points","odds":"-115","point":24.5,"direction":"over","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"..."}]}`;
-  const { text } = await callLLM(prompt);
-  const parsed   = parseJSON(text);
-  if (!parsed) return { props: [] };
-  parsed.props = (parsed.props || []).filter(p => p.confidence >= 5.5 && p.edge >= 3.0);
-  return parsed;
+  try {
+    const grouped = props.reduce((acc, p) => { (acc[p.player] = acc[p.player] || []).push(p); return acc; }, {});
+    const propStr = Object.entries(grouped).slice(0, 20).map(([player, lines]) => {
+      const stat = playerStats?.[player];
+      const avg  = stat ? ` (avg:${stat.pts ? `${stat.pts}pts ` : ""}${stat.reb ? `${stat.reb}reb ` : ""}${stat.ast ? `${stat.ast}ast` : ""})` : "";
+      return `${player}${avg}: ${lines[0].market} ${lines[0].point} (${lines[0].price})`;
+    }).join("
+");
+    const prompt = `Grade player props for ${game.awayTeam.name} @ ${game.homeTeam.name}. Return ONLY JSON.
+
+${propStr}
+
+{"props":[{"id":"p1","type":"prop","player":"Full Name","team":"ABR","market":"player_points","marketLabel":"Points","selection":"Full Name (ABR) Over 24.5 Points","odds":"-115","point":24.5,"direction":"over","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"..."}]}`;
+    const { text } = await callLLM(prompt);
+    const parsed   = parseJSON(text);
+    if (!parsed) return { props: [] };
+    parsed.props = (parsed.props || []).filter(p => p.confidence >= 5.5 && p.edge >= 3.0);
+    return parsed;
+  } catch {
+    const free = buildFreeGameAnalysis(game, { props, playerStats });
+    return { props: free.props || [] };
+  }
 }
 
 export function gradeColor(grade) { return CONFIG.grades[grade]?.color || "#aaa"; }
