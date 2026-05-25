@@ -383,8 +383,8 @@ async function runAnalysis() {
     const batch = gameQueue.slice(start, start + BATCH_SIZE);
     const end   = start + batch.length;
 
-    // Cooldown before batch 2+ (skip for Ollama — no rate limits)
-    if (batchIdx > 0 && lastProvider !== "ollama") {
+    // Cooldown before batch 2+ (skip for Ollama and free-safe deterministic mode)
+    if (batchIdx > 0 && lastProvider !== "ollama" && lastProvider !== "free") {
       await _countdown(COOLDOWN_SECS,
         `Rate-limit cooldown (batch ${batchIdx + 1}/${totalBatches})`);
     }

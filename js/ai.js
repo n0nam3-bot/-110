@@ -402,10 +402,16 @@ Return ONLY a valid JSON array — no markdown, no preamble, no trailing text:
 export async function analyzeCombinedBatch(gamesWithContext) {
   if (!gamesWithContext.length) return [];
   const fallbackAll = buildFreeBatchResults(gamesWithContext);
-  // 6 games × ~450 tokens each = ~2700 output tokens — fits Groq's 3k cap + has headroom
-  // 650 tokens/game covers 5–7 picks + props per game without truncation
-  const maxTokens = Math.min(5000, Math.max(2500, gamesWithContext.length * 650));
-  const prompt    = buildCombinedBatchPrompt(gamesWithContext);
+
+  // Free-safe default: batch analysis returns deterministic, source-based picks
+  // so the UI never stalls on API quotas, partial JSON, or overlong prompts.
+  // Individual game analysis still retains the optional LLM path elsewhere.
+  lastProvider = "free";
+  return fallbackAll;
+  /*
+  // Optional remote batch path retained for future local-only experiments.
+  // const maxTokens = Math.min(5000, Math.max(2500, gamesWithContext.length * 650));
+  // const prompt    = buildCombinedBatchPrompt(gamesWithContext);
   try {
     const { text, provider } = await callLLM(prompt, { maxTokens });
     const clean = text.replace(/```json|```/g, "").trim();
@@ -475,6 +481,7 @@ export async function analyzeCombinedBatch(gamesWithContext) {
     console.warn("Combined batch failed; using free fallback:", e.message);
     return fallbackAll;
   }
+  */
 }
 // Legacy exports kept for the sequential fallback path
 export async function analyzeBatchGames(gamesWithContext) { return analyzeCombinedBatch(gamesWithContext); }
