@@ -179,7 +179,15 @@ export async function getPicksForGame(game, forceRefresh = false) {
 
 export function formatOdds(price) {
   if (!price && price !== 0) return "N/A";
+  // Handle string "N/A", "NaN", "null" etc from LLM when no live odds
+  if (typeof price === "string") {
+    const upper = price.toUpperCase();
+    if (upper === "NAN" || upper === "NULL" || upper === "N/A" || upper === "UNDEFINED") return "N/A";
+    // Already formatted (+110 or -110) — return as-is
+    if (/^[+-]\d/.test(price)) return price;
+  }
   const n = Number(price);
+  if (!isFinite(n)) return "N/A";
   return n > 0 ? `+${n}` : `${n}`;
 }
 

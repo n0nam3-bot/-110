@@ -197,7 +197,13 @@ export async function getTeamSchedule(sportKey, teamId) {
   if (cached) return cached;
   const data   = await fetchJSON(CONFIG.espn.teamSchedule(s.espnSport, s.espnLeague, teamId));
   const events = data?.events || [];
-  const result = events.slice(-10).map(e => ({
+  // CRITICAL: Only use COMPLETED games for form data.
+  // The schedule array ends with future games (winner=undefined → always "L").
+  // Filtering to status.type.completed prevents "0-5 last 5" for every team.
+  const completed = events.filter(e =>
+    e.competitions?.[0]?.status?.type?.completed === true
+  );
+  const result = completed.slice(-10).map(e => ({
     date:     e.date,
     opponent: e.competitions?.[0]?.competitors?.find(c => c.id !== teamId)?.team?.displayName,
     homeAway: e.competitions?.[0]?.competitors?.find(c => c.id === teamId)?.homeAway,

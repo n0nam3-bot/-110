@@ -304,9 +304,20 @@ export async function analyzeCombinedBatch(gamesWithContext) {
     (result.picks || []).forEach(p => fixSelection(p, gc));
     (result.props || []).forEach(p => fixSelection(p, gc));
 
-    // Lower threshold slightly so more picks survive (LLM sometimes undershoots grades)
-    const gamePicks = (result.picks || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
-    const propPicks = (result.props || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
+    // Sanitize odds: LLM returns "NaN" / null / "" when no live lines available
+    const cleanOdds = p => {
+      if (!p.odds || p.odds === "NaN" || p.odds === "null") p.odds = "N/A";
+      return p;
+    };
+    (result.picks || []).forEach(cleanOdds);
+    (result.props || []).forEach(cleanOdds);
+
+    // Adaptive threshold: relax when no live odds (LLM works from records/form only)
+    const hasOdds   = gc?.game?.odds != null;
+    const confFloor = hasOdds ? 5.0 : 4.5;
+    const edgeFloor = hasOdds ? 2.5 : 2.0;
+    const gamePicks = (result.picks || []).filter(p => (p.confidence ?? 0) >= confFloor && (p.edge ?? 0) >= edgeFloor);
+    const propPicks = (result.props || []).filter(p => (p.confidence ?? 0) >= confFloor && (p.edge ?? 0) >= edgeFloor);
 
     // Merge, deduplicate, then sort S → A → B → C (then by confidence within same grade)
     const allSorted = dedupe([...gamePicks, ...propPicks]).sort(

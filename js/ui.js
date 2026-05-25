@@ -165,7 +165,7 @@ export function renderGameCard(game, pickResult, savedIds = []) {
             ${sortedPicks.map(p => pickRowHtml(p, savedIds, p.id === bestBetId)).join("")}
           </div>
         ` : `
-          <div class="no-value-row">No qualifying picks found for this game — no edge detected.</div>
+          <div class="no-value-row">No strong edges found — add an Odds API key for live lines to improve analysis.</div>
         `}
       </div>
 
