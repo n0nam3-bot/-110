@@ -48,7 +48,7 @@ export function teamLogoHtml(team) {
 
 function oddsStripHtml(game) {
   const o = game.odds;
-  if (!o) return `<div class="odds-strip"><div class="odds-cell" style="width:100%;text-align:center"><span class="odds-label">Live odds unavailable from free feeds</span></div></div>`;
+  if (!o) return `<div class="odds-strip"><div class="odds-cell" style="width:100%;text-align:center"><span class="odds-label">Add Odds-API key in Settings for live lines</span></div></div>`;
   return `
     <div class="odds-strip">
       <div class="odds-cell">
