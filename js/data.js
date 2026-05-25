@@ -3,6 +3,8 @@
 const _memCache = {};
 function memGet(k) { const e = _memCache[k]; return e && Date.now() < e.exp ? e.v : null; }
 function memSet(k, v, ttl) { _memCache[k] = { v, exp: Date.now() + ttl }; }
+// Clear all ESPN/odds entries so the next fetch hits the network
+export function clearDataCache() { Object.keys(_memCache).forEach(k => delete _memCache[k]); }
 
 async function fetchJSON(url, opts = {}) {
   try {

@@ -3,6 +3,7 @@ import { initFirebase, onUserChange, ensureUserDoc, getCurrentUser,
          getUserDoc, saveUserKeys, getUserKeys, syncUserKeysToLocalStorage,
          savePick, unsavePick, sendPasswordReset } from "./firebase.js";
 import { loadGamesForSport, getPicksForSport, getPicksForBatch } from "./picks.js";
+import { clearDataCache } from "./data.js";
 import { hasKeys, lastProvider } from "./ai.js";
 import { renderGameCard, renderBestBetsSidebar, renderSavedSidebar,
          renderSummaryBar, attachSaveHandlers, attachToggleHandlers,
@@ -323,31 +324,20 @@ async function runAnalysis() {
     const el = document.getElementById(id); if (el) el.textContent = "–";
   });
 
-  // ── Phase 1: Fetch ALL games for every sport in parallel ─────────────────
-  _showMasterProgress("Fetching all schedules & odds…", 0.02);
+  // ── Phase 1: Always fetch FRESH data — never use cache during an explicit run ──
+  // (Cache is only used on initial page load via _showCachedResults)
+  // Wipe ALL caches so ESPN, odds, and picks are all re-fetched from network
+  sports.forEach(sk => { delete _sportCache[sk]; });
+  clearDataCache(); // clears ESPN + odds in-memory cache in data.js
+
+  _showMasterProgress("Fetching schedules & odds…", 0.02);
 
   await Promise.all(sports.map(async sk => {
     try {
-      // Check memory/localStorage cache first
-      const memCached = _sportCache[sk];
-      if (memCached?.loadedAt && (Date.now() - memCached.loadedAt) < CONFIG.cache.picks) {
-        state.games[sk]    = memCached.games;
-        state.pickData[sk] = memCached.pickData;
-        _renderSportSection(sk, memCached.games, memCached.pickData, true);
-        return;
-      }
-      const lsCached = _lsGet(sk, state.activeDate);
-      if (lsCached) {
-        _sportCache[sk]    = { ...lsCached };
-        state.games[sk]    = lsCached.games;
-        state.pickData[sk] = lsCached.pickData;
-        _renderSportSection(sk, lsCached.games, lsCached.pickData, true);
-        return;
-      }
       const games = await loadGamesForSport(sk, state.activeDate);
       state.games[sk]    = games;
       state.pickData[sk] = [];
-      // Render all cards immediately with odds (spinner = pending analysis)
+      // Show ALL game cards immediately with live odds (analysis spinner while queued)
       _renderSportSection(sk, games, [], false);
     } catch (e) {
       console.warn(`${sk} fetch failed:`, e.message);
@@ -356,28 +346,20 @@ async function runAnalysis() {
     }
   }));
 
-  // Scroll to top of results
-  document.getElementById("results-area")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById("results-area")
+    ?.scrollIntoView({ behavior: "smooth", block: "start" });
 
-  // Check if any sport loaded from cache — those don't need analysis
-  const sportsNeedingAnalysis = sports.filter(sk => {
-    const cached = _sportCache[sk];
-    return !(cached?.loadedAt && (Date.now() - cached.loadedAt) < CONFIG.cache.picks) &&
-           !_lsGet(sk, state.activeDate) &&
-           (state.games[sk] || []).length > 0;
-  });
+  // ── Phase 2: Queue ALL sports that have games ─────────────────────────────
+  const sportsNeedingAnalysis = sports.filter(sk => (state.games[sk] || []).length > 0);
 
   if (!sportsNeedingAnalysis.length) {
-    // Everything was cached — done instantly
-    _showMasterProgress("✓ Loaded from cache", 1.0);
-    setTimeout(() => _clearMasterProgress(), 2000);
-    _updateAggregateSidebar();
+    _showMasterProgress("No games found for the selected date.", 1.0);
+    setTimeout(() => _clearMasterProgress(), 3000);
     if (btn) { btn.textContent = "↻ Refresh Analysis"; btn.disabled = false; }
     state.running = false;
     return;
   }
 
-  // ── Phase 2: Build global game queue from sports that need fresh analysis ──
   const gameQueue = sportsNeedingAnalysis.flatMap(sk =>
     (state.games[sk] || []).map(g => ({ ...g, _sk: sk }))
   );
