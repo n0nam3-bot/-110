@@ -1,10 +1,7 @@
 // ── AI engine: Gemini → Groq → OpenRouter rotation ──
-
 let _orModelIdx = 0;
 function getUserKey(name) { return localStorage.getItem(KEYS[name]) || ""; }
-
 // ─── LLM callers ──────────────────────────────────────────────────────────────
-
 async function callGemini(prompt, key, maxTokens = 2048) {
   if (!key) throw new Error("no_key");
   const url  = CONFIG.llm.gemini.endpoint(key);
@@ -14,7 +11,6 @@ async function callGemini(prompt, key, maxTokens = 2048) {
   const d = await r.json();
   return d.candidates?.[0]?.content?.parts?.[0]?.text || "";
 }
-
 async function callGroq(prompt, key, maxTokens = 2048) {
   if (!key) throw new Error("no_key");
   // Groq free tier rejects requests whose combined token budget exceeds ~4k;
@@ -35,7 +31,6 @@ async function callGroq(prompt, key, maxTokens = 2048) {
   }
   throw new Error("groq_rate_limited");
 }
-
 async function callOpenRouter(prompt, key, maxTokens = 2048) {
   if (!key) throw new Error("no_key");
   const models = CONFIG.llm.openrouter.models;
@@ -54,8 +49,6 @@ async function callOpenRouter(prompt, key, maxTokens = 2048) {
   const d = await r.json();
   return d.choices?.[0]?.message?.content || "";
 }
-
-
 // ─── Ollama (local) ──────────────────────────────────────────────────────────
 // Runs on http://localhost:11434 by default — no API key, no rate limits.
 // Requires Ollama installed: https://ollama.ai
@@ -89,7 +82,6 @@ async function callOllama(prompt, baseUrl, modelsStr, maxTokens = 2048) {
   }
   throw new Error("ollama_all_models_failed");
 }
-
 // ─── Global LLM serializer ────────────────────────────────────────────────────
 // Only ONE call is in-flight at a time. Each call waits for the previous to
 // finish, then pauses _LLM_GAP ms before starting — keeping all providers well
@@ -97,7 +89,6 @@ async function callOllama(prompt, baseUrl, modelsStr, maxTokens = 2048) {
 const _LLM_GAP = 4000; // 4 s gap keeps us at ≤15 req/min — well under all free-tier limits // ms minimum between successive calls
 let   _llmChain = Promise.resolve();
 export let lastProvider = ""; // tracks which provider succeeded last call
-
 function callLLM(prompt, opts = {}) {
   // Chain onto the previous call so requests are always sequential + spaced
   const call = _llmChain.then(() => _callLLMDirect(prompt, opts));
@@ -107,7 +98,6 @@ function callLLM(prompt, opts = {}) {
     .catch(() => new Promise(r => setTimeout(r, _LLM_GAP)));
   return call;
 }
-
 async function _callLLMDirect(prompt, { maxTokens = 2048 } = {}) {
   const geminiKey     = getUserKey("gemini");
   const groqKey       = getUserKey("groq");
@@ -122,7 +112,6 @@ async function _callLLMDirect(prompt, { maxTokens = 2048 } = {}) {
     { name:"openrouter", fn:() => callOpenRouter(prompt, openrouterKey, maxTokens),        available:!!openrouterKey }
   ].filter(p => p.available);
   if (!providers.length) throw new Error("NO_KEYS");
-
   // Pass 1 — try every provider once
   for (const p of providers) {
     try {
@@ -137,11 +126,9 @@ async function _callLLMDirect(prompt, { maxTokens = 2048 } = {}) {
       }
     }
   }
-
   // Pass 2 — all providers failed; cool down then try each once more
   console.warn("All LLM providers failed — cooling down 25 s then retrying…");
   await new Promise(r => setTimeout(r, 25000));
-
   for (const p of providers) {
     try {
       const text = await p.fn();
@@ -150,10 +137,8 @@ async function _callLLMDirect(prompt, { maxTokens = 2048 } = {}) {
       console.warn(`LLM ${p.name} retry failed:`, e.message);
     }
   }
-
   throw new Error("ALL_PROVIDERS_FAILED");
 }
-
 function parseJSON(text) {
   const clean = text.replace(/```json|```/g, "").trim();
   try { return JSON.parse(clean); } catch {}
@@ -163,16 +148,13 @@ function parseJSON(text) {
   if (arr) { try { return JSON.parse(arr[0]); } catch {} }
   return null;
 }
-
 function safeNum(v, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
-
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
-
 function parseRecordPct(record) {
   if (!record) return null;
   const m = String(record).match(/(\d+)\s*-\s*(\d+)(?:\s*-\s*(\d+))?/);
@@ -183,43 +165,35 @@ function parseRecordPct(record) {
   const games = wins + losses + pushes;
   return games ? (wins + 0.5 * pushes) / games : null;
 }
-
 function recentAvgScore(schedule) {
   const vals = (schedule || []).map(g => safeNum(g.score, NaN)).filter(n => Number.isFinite(n));
   if (!vals.length) return null;
   return vals.reduce((a, b) => a + b, 0) / vals.length;
 }
-
 function gradeFrom(confidence, edge) {
   if (confidence >= 8.5 && edge >= 7.0) return 'S';
   if (confidence >= 7.0 && edge >= 5.0) return 'A';
   if (confidence >= 5.5 && edge >= 3.0) return 'B';
   return 'C';
 }
-
 function pickId(gameId, suffix) {
   return `${String(gameId)}_${suffix}`;
 }
-
 function moneylineSelection(teamName, price) {
   return `${teamName} ${price > 0 ? `+${price}` : price}`;
 }
-
 function spreadSelection(teamName, point) {
   const p = safeNum(point, 0);
   const sign = p > 0 ? '+' : '';
   return `${teamName} ${sign}${p}`;
 }
-
 function totalSelection(direction, point) {
   return `${direction} ${point}`;
 }
-
 function buildFreeGameAnalysis(game, context = {}) {
   const { recentFormHome, recentFormAway, props, playerStats } = context;
   const odds = game?.odds || null;
   const gameId = game?.id ?? `${game?.sport || 'game'}_${Date.now()}`;
-
   if (!odds?.moneyline && !odds?.spread && !odds?.total) {
     return {
       gameId,
@@ -234,17 +208,14 @@ function buildFreeGameAnalysis(game, context = {}) {
       analyzedAt: Date.now()
     };
   }
-
   const homePrice = safeNum(odds.moneyline?.home?.price, 0);
   const awayPrice = safeNum(odds.moneyline?.away?.price, 0);
   const homeImp   = homePrice ? impliedProbability(homePrice) : 0;
   const awayImp   = awayPrice ? impliedProbability(awayPrice) : 0;
-
   const homeRec = parseRecordPct(game?.homeTeam?.record);
   const awayRec = parseRecordPct(game?.awayTeam?.record);
   const homeRecent = recentAvgScore(recentFormHome);
   const awayRecent = recentAvgScore(recentFormAway);
-
   const homeValue = (homeRec ?? homeImp) - homeImp + (((homeRecent ?? 0) - (awayRecent ?? 0)) / 100);
   const awayValue = (awayRec ?? awayImp) - awayImp + (((awayRecent ?? 0) - (homeRecent ?? 0)) / 100);
   const mlSide = homeValue === awayValue ? (homeImp >= awayImp ? 'home' : 'away') : (homeValue >= awayValue ? 'home' : 'away');
@@ -255,7 +226,6 @@ function buildFreeGameAnalysis(game, context = {}) {
   const mlValue = Math.abs(homeValue - awayValue);
   const mlConfidence = clamp(5.6 + mlValue * 18 + Math.abs((homeRecent ?? 0) - (awayRecent ?? 0)) / 25, 5.6, 8.4);
   const mlEdge = clamp(3.0 + mlValue * 18, 3.0, 7.4);
-
   const picks = [];
   picks.push({
     id: pickId(gameId, 'ml'),
@@ -267,7 +237,6 @@ function buildFreeGameAnalysis(game, context = {}) {
     grade: gradeFrom(mlConfidence, mlEdge),
     reasoning: `${mlTeam.name} is priced at ${mlPrice > 0 ? `+${mlPrice}` : mlPrice} and the model is using the current record/form data ${mlRec != null ? `(${(mlRec * 100).toFixed(1)}% win rate)` : ''} versus the opponent ${mlOppRec != null ? `(${(mlOppRec * 100).toFixed(1)}% win rate)` : ''}.`
   });
-
   const spreadHome = odds.spread?.home;
   const spreadAway = odds.spread?.away;
   const spreadSide = mlSide === 'home' ? spreadHome : spreadAway;
@@ -287,7 +256,6 @@ function buildFreeGameAnalysis(game, context = {}) {
       reasoning: `${spreadTeam.name} is the side aligned with the moneyline value and the spread is only ${safeNum(spreadSide.point, 0)} at ${safeNum(spreadSide.price, 0) > 0 ? `+${safeNum(spreadSide.price, 0)}` : safeNum(spreadSide.price, 0)}.`
     });
   }
-
   const totalPoint = safeNum(odds.total?.over?.point, NaN);
   if (Number.isFinite(totalPoint)) {
     const totalBase = ((homeRecent ?? homeRec ?? 0) + (awayRecent ?? awayRec ?? 0)) / 2;
@@ -306,7 +274,6 @@ function buildFreeGameAnalysis(game, context = {}) {
       reasoning: `The total is ${totalPoint}, and the recent scoring context points ${direction.toLowerCase()} based on the teams' latest score outputs.`
     });
   }
-
   const propPicks = [];
   if (Array.isArray(props) && props.length) {
     const seenPlayers = new Set();
@@ -315,23 +282,19 @@ function buildFreeGameAnalysis(game, context = {}) {
       seenPlayers.add(p.player);
       const stat = playerStats?.[p.player];
       if (!stat) continue;
-
       const market = String(p.market || '').toLowerCase();
       const point = safeNum(p.point, NaN);
       if (!Number.isFinite(point)) continue;
-
       let avg = null;
       if (market.includes('points')) avg = safeNum(stat.pts, NaN);
       else if (market.includes('rebounds')) avg = safeNum(stat.reb, NaN);
       else if (market.includes('assists')) avg = safeNum(stat.ast, NaN);
       else if (market.includes('blocks')) avg = safeNum(stat.blk, NaN);
       else if (market.includes('steals')) avg = safeNum(stat.stl, NaN);
-
       if (!Number.isFinite(avg)) continue;
       const direction = avg >= point ? 'Over' : 'Under';
       const gap = Math.abs(avg - point);
       if (gap < point * 0.08) continue;
-
       const conf = clamp(5.5 + gap * 0.55, 5.5, 7.5);
       const edge = clamp(3.0 + gap * 0.65, 3.0, 6.5);
       propPicks.push({
@@ -353,13 +316,11 @@ function buildFreeGameAnalysis(game, context = {}) {
       if (propPicks.length >= 2) break;
     }
   }
-
   const allSorted = [...picks, ...propPicks].sort((a, b) => {
     const G = { S: 0, A: 1, B: 2, C: 3 };
     return (G[a.grade] ?? 9) - (G[b.grade] ?? 9) || (b.confidence ?? 0) - (a.confidence ?? 0);
   });
   const bestBet = allSorted.find(p => p.grade === 'S' || p.grade === 'A') || null;
-
   return {
     gameId,
     summary: `${game?.awayTeam?.name || 'Away'} @ ${game?.homeTeam?.name || 'Home'} using live odds and recent form only.`,
@@ -373,23 +334,19 @@ function buildFreeGameAnalysis(game, context = {}) {
     analyzedAt: Date.now()
   };
 }
-
 function buildFreeBatchResults(gamesWithContext) {
   return (gamesWithContext || []).map(gc => buildFreeGameAnalysis(gc.game, gc));
 }
-
 // ─── Batch game prompt ────────────────────────────────────────────────────────
 // ─── Single combined batch prompt (games + props in ONE LLM call) ────────────
 // Merging both into one call halves the total requests per sport load and
 // prevents back-to-back calls that exhaust free-tier rate limits.
 function buildCombinedBatchPrompt(gamesWithContext) {
   const isMMA = gamesWithContext[0]?.game?.sport === "mma";
-
   const gameBlocks = gamesWithContext.map((gc, i) => {
     const { game, recentFormHome, recentFormAway, props, playerStats } = gc;
     const odds  = game.odds;
     const promo = game.promotion ? ` (${game.promotion})` : "";
-
     // ── Odds line ──
     const oddsLine = odds
       ? `ML:${game.homeTeam.abbr} ${odds.moneyline?.home?.price ?? "N/A"}/` +
@@ -397,11 +354,9 @@ function buildCombinedBatchPrompt(gamesWithContext) {
         `Spread:${odds.spread?.home?.point ?? "N/A"}(${odds.spread?.home?.price ?? "N/A"}) | ` +
         `O/U ${odds.total?.over?.point ?? "N/A"}(O${odds.total?.over?.price ?? "N/A"}/U${odds.total?.under?.price ?? "N/A"})`
       : "No live odds";
-
     // ── Season records ──
     const recH = game.homeTeam.record ? ` [${game.homeTeam.record}]` : "";
     const recA = game.awayTeam.record ? ` [${game.awayTeam.record}]` : "";
-
     // ── Recent form — explicit so LLM uses it instead of training data ──
     let formLine = "";
     if (!isMMA) {
@@ -414,7 +369,6 @@ function buildCombinedBatchPrompt(gamesWithContext) {
       formLine = `\nCURRENT FORM — use this, ignore your training data: ` +
                  `${game.homeTeam.name}: ${descH} | ${game.awayTeam.name}: ${descA}`;
     }
-
     // ── Props (inline — top 8 per game to stay lean) ──
     let propsLine = "";
     if (props?.length) {
@@ -426,15 +380,11 @@ function buildCombinedBatchPrompt(gamesWithContext) {
       }).join(", ");
       if (topProps) propsLine = `\nPROPS: ${topProps}`;
     }
-
     return `[${i}] ID:${game.id} | ${game.awayTeam.name}${recA} @ ${game.homeTeam.name}${recH} | ${game.sport.toUpperCase()}${promo} | ${new Date(game.date).toLocaleDateString()}
 ${oddsLine}${formLine}${propsLine}`;
   }).join("\n\n");
-
   const hasProps  = gamesWithContext.some(gc => gc.props?.length);
-
   return `You are a sharp sports betting analyst. Analyze ALL ${gamesWithContext.length} game(s) below.
-
 ⚠ CRITICAL RULES — violating these makes the output useless:
 1. Use ONLY the provided odds, records, and CURRENT FORM data. Ignore your training knowledge for team performance and rosters.
 2. Every game MUST have ALL THREE base picks: Spread, Moneyline, AND Total (Over/Under).
@@ -444,26 +394,20 @@ ${oddsLine}${formLine}${propsLine}`;
 6. Grade hierarchy (strictly follow): S=conf≥8.5,edge≥7% | A=conf≥7,edge≥5% | B=conf≥5.5,edge≥3%
 7. bestBet MUST be your single highest-graded pick (S first, then A). If best grade is B, set bestBet=null and noValue=true.
 8. Reasoning: 1 specific sentence referencing a concrete data point (mention actual record, exact odds line, or head-to-head context). No vague phrases like 'better record' or 'slight edge'.${hasProps ? "\n9. Props: rate every PROPS line listed — include all B+ prop picks." : ""}${isMMA ? "\n9. MMA: also grade method (KO/Sub/Dec) and round props." : ""}
-
 ${gameBlocks}
-
 Return ONLY a valid JSON array — no markdown, no preamble, no trailing text:
 [{"gameId":"ID","summary":"2 sentences — cite EXACT records (e.g. 34-16 vs 23-30) and specific odds; no generic phrases","picks":[{"id":"g0p1","type":"spread|moneyline|total","selection":"Full Team Name ±X.X or Over/Under X.X","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"1 specific sentence with data reference"}],"bestBet":{"id":"g0p1","type":"...","selection":"Full Team Name ±X.X — exact bet","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"1 specific sentence with data reference"},"lean":"home|away|over|under|none","confidence":7.5,"noValue":false,"props":[{"id":"pr1","type":"prop","player":"Full Name","team":"ABR","market":"player_points","marketLabel":"Points","selection":"Full Name (ABR) Over 24.5 Points","odds":"-115","point":24.5,"direction":"over","confidence":7.0,"edge":5.0,"grade":"A","reasoning":"1 specific sentence with data reference"}]}]`;
 }
-
 // ─── Single combined export (replaces separate analyzeBatchGames + analyzeBatchProps) ──
 export async function analyzeCombinedBatch(gamesWithContext) {
   if (!gamesWithContext.length) return [];
   const fallbackAll = buildFreeBatchResults(gamesWithContext);
-
   // 6 games × ~450 tokens each = ~2700 output tokens — fits Groq's 3k cap + has headroom
   // 650 tokens/game covers 5–7 picks + props per game without truncation
   const maxTokens = Math.min(5000, Math.max(2500, gamesWithContext.length * 650));
   const prompt    = buildCombinedBatchPrompt(gamesWithContext);
-
   try {
     const { text, provider } = await callLLM(prompt, { maxTokens });
-
     const clean = text.replace(/```json|```/g, "").trim();
     let parsed  = null;
     try { parsed = JSON.parse(clean); } catch {}
@@ -472,9 +416,7 @@ export async function analyzeCombinedBatch(gamesWithContext) {
       if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
     }
     if (!Array.isArray(parsed)) throw new Error("BATCH_PARSE_FAILED");
-
     const GRADE = { S:0, A:1, B:2, C:3 };
-
     function dedupe(picks) {
       const seen = new Set();
       return picks.filter(p => {
@@ -484,7 +426,6 @@ export async function analyzeCombinedBatch(gamesWithContext) {
         return true;
       });
     }
-
     function fixSelection(pick, gc) {
       if (!gc?.game?.odds || !pick?.selection) return pick;
       const odds = gc.game.odds;
@@ -507,20 +448,16 @@ export async function analyzeCombinedBatch(gamesWithContext) {
       }
       return pick;
     }
-
     const merged = parsed.map(result => {
       const gc = gamesWithContext.find(g => String(g.game.id) === String(result.gameId));
       if (!gc) return result;
-
       (result.picks || []).forEach(p => fixSelection(p, gc));
       (result.props || []).forEach(p => fixSelection(p, gc));
-
       const gamePicks = (result.picks || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
       const propPicks = (result.props || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
       const allSorted = dedupe([...gamePicks, ...propPicks]).sort(
         (a, b) => (GRADE[a.grade] ?? 9) - (GRADE[b.grade] ?? 9) || (b.confidence ?? 0) - (a.confidence ?? 0)
       );
-
       const bestCandidate = allSorted.find(p => p.grade === "S" || p.grade === "A") || null;
       return {
         ...result,
@@ -532,7 +469,6 @@ export async function analyzeCombinedBatch(gamesWithContext) {
         analyzedAt: Date.now()
       };
     });
-
     const byId = new Map(merged.map(r => [String(r.gameId), r]));
     return gamesWithContext.map(gc => byId.get(String(gc.game.id)) || fallbackAll.find(r => String(r.gameId) === String(gc.game.id)));
   } catch (e) {
@@ -540,11 +476,9 @@ export async function analyzeCombinedBatch(gamesWithContext) {
     return fallbackAll;
   }
 }
-
 // Legacy exports kept for the sequential fallback path
 export async function analyzeBatchGames(gamesWithContext) { return analyzeCombinedBatch(gamesWithContext); }
 export async function analyzeBatchProps(_propsPerGame)     { return []; } // merged into combined call
-
 // ─── Individual game analysis (kept as fallback) ──────────────────────────────
 function buildGamePrompt(game, teamStatsHome, teamStatsAway, injuryData, recentFormHome, recentFormAway) {
   const injuryStr = injuryData && Object.keys(injuryData).length
@@ -557,7 +491,6 @@ function buildGamePrompt(game, teamStatsHome, teamStatsAway, injuryData, recentF
   const oddsStr = odds ? `\nMoneyline: ${game.homeTeam.abbr} ${odds.moneyline?.home?.price||"N/A"} | ${game.awayTeam.abbr} ${odds.moneyline?.away?.price||"N/A"}\nSpread: ${game.homeTeam.abbr} ${odds.spread?.home?.point||"N/A"} (${odds.spread?.home?.price||"N/A"})\nTotal: O/U ${odds.total?.over?.point||"N/A"} (O${odds.total?.over?.price||"N/A"} / U${odds.total?.under?.price||"N/A"})` : "Odds: Not available";
   return `You are a sharp sports betting analyst. Analyze this ${isMMA?"MMA fight":"game"} and return ONLY JSON.\n\nGAME: ${game.awayTeam.name} @ ${game.homeTeam.name} | ${game.sport.toUpperCase()} | ${new Date(game.date).toLocaleDateString()}\nODDS: ${oddsStr}\n${isMMA?"":(`HOME L10: ${formH}\nAWAY L10: ${formA}\nINJURIES: ${injuryStr}`)}\n\nGrade picks S/A/B/C, include all B+. bestBet must be A or S.\n\nReturn JSON:\n{"gameId":"${game.id}","summary":"...","picks":[{"id":"u1","type":"spread|moneyline|total","selection":"Full Team Name bet","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"..."}],"bestBet":{"id":"u1","type":"...","selection":"...","odds":"...","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"..."},"lean":"home|away|over|under|none","confidence":7.5,"noValue":false}`;
 }
-
 export async function analyzeGame(game, context = {}) {
   const { teamStatsHome, teamStatsAway, injuryData, recentFormHome, recentFormAway } = context;
   try {
@@ -572,7 +505,6 @@ export async function analyzeGame(game, context = {}) {
     return buildFreeGameAnalysis(game, context);
   }
 }
-
 export async function analyzeProps(game, props, playerStats = {}) {
   if (!props?.length) return { props: [] };
   try {
@@ -581,12 +513,9 @@ export async function analyzeProps(game, props, playerStats = {}) {
       const stat = playerStats?.[player];
       const avg  = stat ? ` (avg:${stat.pts ? `${stat.pts}pts ` : ""}${stat.reb ? `${stat.reb}reb ` : ""}${stat.ast ? `${stat.ast}ast` : ""})` : "";
       return `${player}${avg}: ${lines[0].market} ${lines[0].point} (${lines[0].price})`;
-    }).join("
-");
+    }).join("\n");
     const prompt = `Grade player props for ${game.awayTeam.name} @ ${game.homeTeam.name}. Return ONLY JSON.
-
 ${propStr}
-
 {"props":[{"id":"p1","type":"prop","player":"Full Name","team":"ABR","market":"player_points","marketLabel":"Points","selection":"Full Name (ABR) Over 24.5 Points","odds":"-115","point":24.5,"direction":"over","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"..."}]}`;
     const { text } = await callLLM(prompt);
     const parsed   = parseJSON(text);
@@ -598,6 +527,5 @@ ${propStr}
     return { props: free.props || [] };
   }
 }
-
 export function gradeColor(grade) { return CONFIG.grades[grade]?.color || "#aaa"; }
 export function hasKeys() { return !!(localStorage.getItem(KEYS.gemini) || localStorage.getItem(KEYS.groq) || localStorage.getItem(KEYS.openrouter) || localStorage.getItem(KEYS.ollamaModels)); }
