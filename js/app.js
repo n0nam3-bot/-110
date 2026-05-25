@@ -26,6 +26,13 @@ let state = {
   running:  false
 };
 
+function _localDateKey(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}${m}${d}`;
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
   initFirebase();
@@ -53,6 +60,7 @@ async function init() {
   });
 
   state.selectedSports = _loadSelectedSports();
+  state.activeDate = _localDateKey(); // default to today as an explicit ESPN date
   setupSportFilter();
   setupDateSelector();
   setupModals();
@@ -105,27 +113,29 @@ function _refreshChips() {
 function setupDateSelector() {
   const input = document.getElementById("date-selector");
   if (!input) return;
-  input.value = new Date().toISOString().split("T")[0];
+  input.value = `${_localDateKey().slice(0,4)}-${_localDateKey().slice(4,6)}-${_localDateKey().slice(6,8)}`;
   input.addEventListener("change", () => {
     _invalidateAllCaches();
-    state.activeDate = input.value ? input.value.replace(/-/g, "") : null;
+    state.activeDate = input.value ? input.value.replace(/-/g, "") : _localDateKey();
     _clearResults();
   });
   document.getElementById("btn-today")?.addEventListener("click", () => {
     _invalidateAllCaches();
-    input.value = new Date().toISOString().split("T")[0];
-    state.activeDate = null;
+    input.value = `${_localDateKey().slice(0,4)}-${_localDateKey().slice(4,6)}-${_localDateKey().slice(6,8)}`;
+    state.activeDate = _localDateKey();
     _clearResults();
   });
 }
 
 function _invalidateAllCaches() {
   Object.keys(_sportCache).forEach(k => delete _sportCache[k]);
-  Object.keys(localStorage).filter(k => k.startsWith("_110_picks_")).forEach(k => localStorage.removeItem(k));
+  Object.keys(localStorage)
+    .filter(k => k.startsWith("_110_picks_"))
+    .forEach(k => localStorage.removeItem(k));
 }
 
 // ─── localStorage persistence ────────────────────────────────────────────────
-const _LS_PREFIX = "_110_picks_";
+const _LS_PREFIX = `_110_picks_${CONFIG?.app?.version || "1"}_`;
 const _LS_TTL    = 30 * 60 * 1000;
 function _lsKey(sk, date) { return `${_LS_PREFIX}${sk}_${date || "today"}`; }
 function _lsGet(sk, date) {
