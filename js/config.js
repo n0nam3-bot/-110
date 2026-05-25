@@ -10,7 +10,7 @@ const CONFIG = {
   },
   app: {
     name: "-110", tagline: "Sharp picks. No noise.",
-    baseUrl: "https://n0nam3-bot.github.io/-110", version: "1.1.11"
+    baseUrl: "https://n0nam3-bot.github.io/-110", version: "1.2.0"
   },
   cache: {
     odds: 15*60*1000, picks: 30*60*1000,
@@ -30,6 +30,9 @@ const CONFIG = {
     scoreboard:   (s,l,date) => `https://site.api.espn.com/apis/site/v2/sports/${s}/${l}/scoreboard${date ? `?dates=${date}` : ""}`,
     teamStats:    (s,l,id)   => `https://site.api.espn.com/apis/site/v2/sports/${s}/${l}/teams/${id}/statistics`,
     teamSchedule: (s,l,id)   => `https://site.api.espn.com/apis/site/v2/sports/${s}/${l}/teams/${id}/schedule`
+  },
+  publicApis: {
+    mlbSchedule: (date) => `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${date}&hydrate=team,linescore,decisions,probablePitcher,person,venue`
   },
   oddsApi:     { base:"https://api.the-odds-api.com/v4", regions:"us", markets:"h2h,spreads,totals", format:"american" },
   sleeper:     { players:"https://api.sleeper.app/v1/players/nfl" },

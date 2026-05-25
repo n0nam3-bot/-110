@@ -152,12 +152,9 @@ function safeNum(v, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
-function priceText(v) {
+function safeMaybeNum(v) {
   const n = Number(v);
-  return Number.isFinite(n) ? (n > 0 ? `+${n}` : `${n}`) : "N/A";
-}
-function hasNumeric(v) {
-  return Number.isFinite(Number(v));
+  return Number.isFinite(n) ? n : null;
 }
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
@@ -187,7 +184,8 @@ function pickId(gameId, suffix) {
   return `${String(gameId)}_${suffix}`;
 }
 function moneylineSelection(teamName, price) {
-  return `${teamName} ${price > 0 ? `+${price}` : price}`;
+  if (price === null || price === undefined || Number.isNaN(Number(price))) return `${teamName}`;
+  return `${teamName} ${Number(price) > 0 ? `+${Number(price)}` : Number(price)}`;
 }
 function spreadSelection(teamName, point) {
   const p = safeNum(point, 0);
@@ -201,52 +199,40 @@ function buildFreeGameAnalysis(game, context = {}) {
   const { recentFormHome, recentFormAway, props, playerStats } = context;
   const odds = game?.odds || null;
   const gameId = game?.id ?? `${game?.sport || 'game'}_${Date.now()}`;
-  if (!odds?.moneyline && !odds?.spread && !odds?.total) {
-    const homeRec = parseRecordPct(game?.homeTeam?.record);
-    const awayRec = parseRecordPct(game?.awayTeam?.record);
-    const homeRecent = recentAvgScore(recentFormHome);
-    const awayRecent = recentAvgScore(recentFormAway);
-    const homeValue = (homeRec ?? 0.5) + (((homeRecent ?? 0) - (awayRecent ?? 0)) / 100);
-    const awayValue = (awayRec ?? 0.5) + (((awayRecent ?? 0) - (homeRecent ?? 0)) / 100);
-    const leanSide = homeValue === awayValue ? 'none' : (homeValue > awayValue ? 'home' : 'away');
-    const leanTeam = leanSide === 'home' ? game.homeTeam : game.awayTeam;
-    const leanConfidence = clamp(5.0 + Math.abs(homeValue - awayValue) * 10, 5.0, 6.8);
+
+  const homePrice = safeMaybeNum(odds?.moneyline?.home?.price);
+  const awayPrice = safeMaybeNum(odds?.moneyline?.away?.price);
+  const homeImp   = homePrice !== null ? impliedProbability(homePrice) : null;
+  const awayImp   = awayPrice !== null ? impliedProbability(awayPrice) : null;
+  const homeRec   = parseRecordPct(game?.homeTeam?.record);
+  const awayRec   = parseRecordPct(game?.awayTeam?.record);
+  const homeRecent = recentAvgScore(recentFormHome);
+  const awayRecent = recentAvgScore(recentFormAway);
+
+  const hasSpread = !!(odds?.spread?.home?.point !== undefined || odds?.spread?.away?.point !== undefined);
+  const hasTotal  = !!(odds?.total?.over?.point !== undefined);
+  const hasMoneylinePrice = homePrice !== null || awayPrice !== null;
+
+  if (!hasMoneylinePrice && !hasSpread && !hasTotal) {
     return {
       gameId,
-      summary: 'No live odds available; using records and recent form for a lean only.',
-      picks: leanSide === 'none' ? [] : [{
-        id: pickId(gameId, 'lean'),
-        type: 'lean',
-        selection: `${leanTeam.name} lean (odds unavailable)`,
-        odds: 'N/A',
-        confidence: Number(leanConfidence.toFixed(1)),
-        edge: 0,
-        grade: 'C',
-        reasoning: `${leanTeam.name} has the better record/form profile in the available ESPN data, but there are no live market lines to price a wager.`
-      }],
+      summary: 'No live odds available for this game.',
+      picks: [],
       props: [],
       bestBet: null,
-      lean: leanSide,
-      confidence: Number(leanConfidence.toFixed(1)),
+      lean: 'none',
+      confidence: 0,
       noValue: true,
       provider: 'free',
       analyzedAt: Date.now()
     };
   }
-  const homePrice = hasNumeric(odds.moneyline?.home?.price) ? Number(odds.moneyline.home.price) : null;
-  const awayPrice = hasNumeric(odds.moneyline?.away?.price) ? Number(odds.moneyline.away.price) : null;
-  const homeImp   = homePrice ? impliedProbability(homePrice) : 0;
-  const awayImp   = awayPrice ? impliedProbability(awayPrice) : 0;
-  const homeRec = parseRecordPct(game?.homeTeam?.record);
-  const awayRec = parseRecordPct(game?.awayTeam?.record);
-  const homeRecent = recentAvgScore(recentFormHome);
-  const awayRecent = recentAvgScore(recentFormAway);
-  const homeValue = (homeRec ?? homeImp) - homeImp + (((homeRecent ?? 0) - (awayRecent ?? 0)) / 100);
-  const awayValue = (awayRec ?? awayImp) - awayImp + (((awayRecent ?? 0) - (homeRecent ?? 0)) / 100);
-  const mlSide = homeValue === awayValue ? (homeImp >= awayImp ? 'home' : 'away') : (homeValue >= awayValue ? 'home' : 'away');
+
+  const homeValue = (homeRec ?? homeImp ?? 0) - (homeImp ?? 0) + (((homeRecent ?? 0) - (awayRecent ?? 0)) / 100);
+  const awayValue = (awayRec ?? awayImp ?? 0) - (awayImp ?? 0) + (((awayRecent ?? 0) - (homeRecent ?? 0)) / 100);
+  const mlSide = homeValue === awayValue ? ((homeImp ?? 0) >= (awayImp ?? 0) ? 'home' : 'away') : (homeValue >= awayValue ? 'home' : 'away');
   const mlTeam = mlSide === 'home' ? game.homeTeam : game.awayTeam;
   const mlPrice = mlSide === 'home' ? homePrice : awayPrice;
-  const mlHasPrice = Number.isFinite(mlPrice);
   const mlOppRec = mlSide === 'home' ? awayRec : homeRec;
   const mlRec = mlSide === 'home' ? homeRec : awayRec;
   const mlValue = Math.abs(homeValue - awayValue);
@@ -256,55 +242,49 @@ function buildFreeGameAnalysis(game, context = {}) {
   picks.push({
     id: pickId(gameId, 'ml'),
     type: 'moneyline',
-    selection: mlHasPrice ? moneylineSelection(mlTeam.name, mlPrice) : `${mlTeam.name} lean (moneyline unavailable)`,
-    odds: priceText(mlPrice),
+    selection: moneylineSelection(mlTeam.name, mlPrice),
+    odds: mlPrice === null ? 'N/A' : `${mlPrice > 0 ? `+${mlPrice}` : mlPrice}`,
     confidence: Number(mlConfidence.toFixed(1)),
     edge: Number(mlEdge.toFixed(1)),
     grade: gradeFrom(mlConfidence, mlEdge),
-    reasoning: mlHasPrice
-      ? `${mlTeam.name} is priced at ${priceText(mlPrice)} and the model is using the current record/form data ${mlRec != null ? `(${(mlRec * 100).toFixed(1)}% win rate)` : ''} versus the opponent ${mlOppRec != null ? `(${(mlOppRec * 100).toFixed(1)}% win rate)` : ''}.`
-      : `${mlTeam.name} has the better record/form profile in the available data, but the moneyline price is unavailable so this is a lean only.`
+    reasoning: `${mlTeam.name} is being leaned on from record and recent form${mlPrice === null ? ' because no reliable market price is available from the free feeds.' : ` at ${mlPrice > 0 ? `+${mlPrice}` : mlPrice}.`} ${mlRec != null ? `Current win rate: ${(mlRec * 100).toFixed(1)}%` : ''}${mlOppRec != null ? ` vs ${(mlOppRec * 100).toFixed(1)}%` : ''}.`
   });
-  const spreadHome = odds.spread?.home;
-  const spreadAway = odds.spread?.away;
+  const spreadHome = odds?.spread?.home;
+  const spreadAway = odds?.spread?.away;
   const spreadSide = mlSide === 'home' ? spreadHome : spreadAway;
   const spreadTeam = mlSide === 'home' ? game.homeTeam : game.awayTeam;
   if (spreadSide?.point !== undefined) {
     const spreadGap = Math.abs(safeNum(spreadSide.point, 0));
     const spreadConfidence = clamp(mlConfidence - 0.3 + spreadGap * 0.2, 5.4, 8.0);
     const spreadEdge = clamp(mlEdge - 0.4 + spreadGap * 0.15, 3.0, 7.0);
-    const spreadPrice = Number.isFinite(Number(spreadSide.price)) ? Number(spreadSide.price) : null;
+    const spreadPrice = safeMaybeNum(spreadSide.price);
     picks.push({
       id: pickId(gameId, 'sp'),
       type: 'spread',
       selection: spreadSelection(spreadTeam.name, safeNum(spreadSide.point, 0)),
-      odds: priceText(spreadPrice),
+      odds: spreadPrice === null ? 'N/A' : `${spreadPrice > 0 ? '+' : ''}${spreadPrice}`,
       confidence: Number(spreadConfidence.toFixed(1)),
       edge: Number(spreadEdge.toFixed(1)),
       grade: gradeFrom(spreadConfidence, spreadEdge),
-      reasoning: spreadPrice != null
-        ? `${spreadTeam.name} is the side aligned with the moneyline value and the spread is only ${safeNum(spreadSide.point, 0)} at ${priceText(spreadPrice)}.`
-        : `${spreadTeam.name} is the side aligned with the moneyline value and the spread is only ${safeNum(spreadSide.point, 0)}, but the market price is unavailable.`
+      reasoning: `${spreadTeam.name} is the side aligned with the moneyline lean and the spread is ${safeNum(spreadSide.point, 0)}${spreadPrice === null ? ' with no reliable price in the free feeds.' : ` at ${spreadPrice > 0 ? `+${spreadPrice}` : spreadPrice}`}.`
     });
   }
-  const totalPoint = safeNum(odds.total?.over?.point, NaN);
+  const totalPoint = safeMaybeNum(odds?.total?.over?.point);
   if (Number.isFinite(totalPoint)) {
     const totalBase = ((homeRecent ?? homeRec ?? 0) + (awayRecent ?? awayRec ?? 0)) / 2;
     const direction = totalBase <= totalPoint / 2 ? 'Under' : 'Over';
-    const totalPrice = direction === 'Under' ? (Number.isFinite(Number(odds.total?.under?.price)) ? Number(odds.total.under.price) : null) : (Number.isFinite(Number(odds.total?.over?.price)) ? Number(odds.total.over.price) : null);
+    const totalPrice = direction === 'Under' ? safeMaybeNum(odds?.total?.under?.price) : safeMaybeNum(odds?.total?.over?.price);
     const totalConfidence = clamp(5.4 + Math.abs(totalBase - totalPoint / 2) * 0.35, 5.4, 7.8);
     const totalEdge = clamp(3.0 + Math.abs(totalBase - totalPoint / 2) * 0.5, 3.0, 6.8);
     picks.push({
       id: pickId(gameId, 'tot'),
       type: 'total',
       selection: totalSelection(direction, totalPoint),
-      odds: priceText(totalPrice),
+      odds: totalPrice === null ? 'N/A' : `${totalPrice > 0 ? '+' : ''}${totalPrice}`,
       confidence: Number(totalConfidence.toFixed(1)),
       edge: Number(totalEdge.toFixed(1)),
       grade: gradeFrom(totalConfidence, totalEdge),
-      reasoning: totalPrice != null
-        ? `The total is ${totalPoint}, and the recent scoring context points ${direction.toLowerCase()} based on the teams' latest score outputs.`
-        : `The total is ${totalPoint}, and the recent scoring context points ${direction.toLowerCase()} based on the teams' latest score outputs, but the market price is unavailable.`
+      reasoning: `The total is ${totalPoint}, and the recent scoring context points ${direction.toLowerCase()} based on the teams' latest score outputs.`
     });
   }
   const propPicks = [];
@@ -316,20 +296,21 @@ function buildFreeGameAnalysis(game, context = {}) {
       const stat = playerStats?.[p.player];
       if (!stat) continue;
       const market = String(p.market || '').toLowerCase();
-      const point = safeNum(p.point, NaN);
+      const point = safeMaybeNum(p.point);
       if (!Number.isFinite(point)) continue;
       let avg = null;
-      if (market.includes('points')) avg = safeNum(stat.pts, NaN);
-      else if (market.includes('rebounds')) avg = safeNum(stat.reb, NaN);
-      else if (market.includes('assists')) avg = safeNum(stat.ast, NaN);
-      else if (market.includes('blocks')) avg = safeNum(stat.blk, NaN);
-      else if (market.includes('steals')) avg = safeNum(stat.stl, NaN);
+      if (market.includes('points')) avg = safeMaybeNum(stat.pts);
+      else if (market.includes('rebounds')) avg = safeMaybeNum(stat.reb);
+      else if (market.includes('assists')) avg = safeMaybeNum(stat.ast);
+      else if (market.includes('blocks')) avg = safeMaybeNum(stat.blk);
+      else if (market.includes('steals')) avg = safeMaybeNum(stat.stl);
       if (!Number.isFinite(avg)) continue;
       const direction = avg >= point ? 'Over' : 'Under';
       const gap = Math.abs(avg - point);
       if (gap < point * 0.08) continue;
       const conf = clamp(5.5 + gap * 0.55, 5.5, 7.5);
       const edge = clamp(3.0 + gap * 0.65, 3.0, 6.5);
+      const propPrice = safeMaybeNum(p.price);
       propPicks.push({
         id: pickId(gameId, `prop_${p.player.replace(/\s+/g, '_').slice(0, 18)}`),
         type: 'prop',
@@ -338,7 +319,7 @@ function buildFreeGameAnalysis(game, context = {}) {
         market: p.market,
         marketLabel: p.marketLabel || p.market,
         selection: `${p.player}${p.team ? ` (${p.team})` : ''} ${direction} ${point} ${p.marketLabel || ''}`.trim(),
-        odds: priceText(p.price),
+        odds: propPrice === null ? 'N/A' : `${propPrice > 0 ? '+' : ''}${propPrice}`,
         point,
         direction: direction.toLowerCase(),
         confidence: Number(conf.toFixed(1)),
@@ -356,7 +337,7 @@ function buildFreeGameAnalysis(game, context = {}) {
   const bestBet = allSorted.find(p => p.grade === 'S' || p.grade === 'A') || null;
   return {
     gameId,
-    summary: `${game?.awayTeam?.name || 'Away'} @ ${game?.homeTeam?.name || 'Home'} using available odds and recent form only.`,
+    summary: `${game?.awayTeam?.name || 'Away'} @ ${game?.homeTeam?.name || 'Home'} using free public data and recent form.`,
     picks: allSorted.slice(0, 6),
     props: propPicks,
     bestBet,
@@ -367,6 +348,7 @@ function buildFreeGameAnalysis(game, context = {}) {
     analyzedAt: Date.now()
   };
 }
+
 function buildFreeBatchResults(gamesWithContext) {
   return (gamesWithContext || []).map(gc => buildFreeGameAnalysis(gc.game, gc));
 }
@@ -436,19 +418,12 @@ export async function analyzeCombinedBatch(gamesWithContext) {
   if (!gamesWithContext.length) return [];
   const fallbackAll = buildFreeBatchResults(gamesWithContext);
 
-  // Free-safe default: batch analysis returns deterministic, source-based picks
-  // so the UI never stalls on API quotas, partial JSON, or overlong prompts.
-  // Individual game analysis still retains the optional LLM path elsewhere.
-  lastProvider = "free";
-  return fallbackAll;
-  /*
-  // Optional remote batch path retained for future local-only experiments.
-  // const maxTokens = Math.min(5000, Math.max(2500, gamesWithContext.length * 650));
-  // const prompt    = buildCombinedBatchPrompt(gamesWithContext);
   try {
+    const maxTokens = Math.min(5000, Math.max(2500, gamesWithContext.length * 650));
+    const prompt = buildCombinedBatchPrompt(gamesWithContext);
     const { text, provider } = await callLLM(prompt, { maxTokens });
     const clean = text.replace(/```json|```/g, "").trim();
-    let parsed  = null;
+    let parsed = null;
     try { parsed = JSON.parse(clean); } catch {}
     if (!Array.isArray(parsed)) {
       const m = clean.match(/\[[\s\S]*\]/);
@@ -514,7 +489,6 @@ export async function analyzeCombinedBatch(gamesWithContext) {
     console.warn("Combined batch failed; using free fallback:", e.message);
     return fallbackAll;
   }
-  */
 }
 // Legacy exports kept for the sequential fallback path
 export async function analyzeBatchGames(gamesWithContext) { return analyzeCombinedBatch(gamesWithContext); }

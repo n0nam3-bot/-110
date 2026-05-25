@@ -33,73 +33,57 @@ function extractMMAPromotion(name) {
 }
 
 // ─── ESPN ────────────────────────────────────────────────────────────────────
-
-function _numOrNull(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+// ─── Free public MLB schedule source ─────────────────────────────────────────
+async function getMLBPublicGames(date) {
+  if (!date) return [];
+  const ck = `mlb_public_${date}`;
+  const cached = memGet(ck);
+  if (cached) return cached;
+  const url = CONFIG.publicApis?.mlbSchedule?.(date);
+  if (!url) return [];
+  const data = await fetchJSON(url);
+  const games = data?.dates?.flatMap(d => d.games || []) || [];
+  const result = games.map(g => {
+    const home = g?.teams?.home || {};
+    const away = g?.teams?.away || {};
+    const homeTeam = home.team || {};
+    const awayTeam = away.team || {};
+    const state = g?.status?.abstractGameState || (g?.status?.detailedState === 'Final' ? 'Final' : 'Preview');
+    return {
+      id: String(g?.gamePk || `${date}_${awayTeam.id || awayTeam.name || 'away'}_${homeTeam.id || homeTeam.name || 'home'}`),
+      sport: 'mlb',
+      name: `${awayTeam.name || 'Away'} @ ${homeTeam.name || 'Home'}`,
+      shortName: `${awayTeam.abbreviation || awayTeam.name || 'AWY'} @ ${homeTeam.abbreviation || homeTeam.name || 'HME'}`,
+      date: g?.gameDate || `${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}T00:00:00Z`,
+      status: g?.status?.detailedState || 'scheduled',
+      completed: state === 'Final',
+      live: state === 'Live',
+      pre: state === 'Preview',
+      homeTeam: {
+        id: homeTeam.id,
+        name: homeTeam.name,
+        abbr: homeTeam.abbreviation,
+        logo: homeTeam.id ? `https://www.mlbstatic.com/team-logos/team-primary-on-light/${homeTeam.id}.svg` : null,
+        score: home?.score,
+        record: home?.leagueRecord ? `${home.leagueRecord.wins}-${home.leagueRecord.losses}` : null
+      },
+      awayTeam: {
+        id: awayTeam.id,
+        name: awayTeam.name,
+        abbr: awayTeam.abbreviation,
+        logo: awayTeam.id ? `https://www.mlbstatic.com/team-logos/team-primary-on-light/${awayTeam.id}.svg` : null,
+        score: away?.score,
+        record: away?.leagueRecord ? `${away.leagueRecord.wins}-${away.leagueRecord.losses}` : null
+      },
+      venue: g?.venue?.name,
+      broadcast: g?.broadcasts?.map(b => b.name || b.type).filter(Boolean).join(', ') || null,
+    };
+  });
+  const pregame = result.filter(g => !g.completed && !g.live);
+  memSet(ck, pregame, CONFIG.cache.espn);
+  return pregame;
 }
 
-function parseESPNOdds(comp, homeName = "", awayName = "") {
-  const source = comp?.odds?.[0] || comp?.odds?.at?.(-1) || comp?.lines?.[0] || null;
-  if (!source) return null;
-
-  const homeMoney = _numOrNull(source.homeTeamOdds?.moneyLine ?? source.homeTeamOdds?.moneyline ?? source.homeTeamOdds?.price);
-  const awayMoney = _numOrNull(source.awayTeamOdds?.moneyLine ?? source.awayTeamOdds?.moneyline ?? source.awayTeamOdds?.price);
-  const homeSpreadPoint = _numOrNull(source.homeTeamOdds?.pointSpread ?? source.homeTeamOdds?.spread ?? source.homeTeamOdds?.line ?? source.spread);
-  const awaySpreadPoint = _numOrNull(source.awayTeamOdds?.pointSpread ?? source.awayTeamOdds?.spread ?? source.awayTeamOdds?.line ?? (homeSpreadPoint != null ? -homeSpreadPoint : null));
-  const homeSpreadPrice = _numOrNull(source.homeTeamOdds?.price ?? source.homeTeamOdds?.odds ?? source.homeTeamOdds?.spreadOdds);
-  const awaySpreadPrice = _numOrNull(source.awayTeamOdds?.price ?? source.awayTeamOdds?.odds ?? source.awayTeamOdds?.spreadOdds);
-  const totalPoint = _numOrNull(source.overUnder ?? source.total ?? source.over_under ?? source.overUnderLine);
-  const overPrice = _numOrNull(source.overOdds ?? source.overPrice ?? source.overTeamOdds?.price ?? source.overTeamOdds?.moneyLine);
-  const underPrice = _numOrNull(source.underOdds ?? source.underPrice ?? source.underTeamOdds?.price ?? source.underTeamOdds?.moneyLine);
-
-  const hasAny = [homeMoney, awayMoney, homeSpreadPoint, awaySpreadPoint, totalPoint].some(v => v != null);
-  if (!hasAny) return null;
-
-  const homeAbbr = (homeName || "").toLowerCase();
-  const awayAbbr = (awayName || "").toLowerCase();
-  const details = String(source.details || source.text || "").toLowerCase();
-  const homeNameLast = homeAbbr.split(/\s+/).filter(Boolean).pop() || "";
-  const awayNameLast = awayAbbr.split(/\s+/).filter(Boolean).pop() || "";
-
-  let spreadHome = homeSpreadPoint;
-  let spreadAway = awaySpreadPoint;
-  if (spreadHome == null && spreadAway != null) spreadHome = -spreadAway;
-  if (spreadAway == null && spreadHome != null) spreadAway = -spreadHome;
-
-  // ESPN sometimes only exposes a short details string like "STL -1.5"
-  if (spreadHome == null && details) {
-    const m = details.match(/([a-z0-9 .&'\-]+)\s*([+-]\d+(?:\.\d+)?)$/i);
-    if (m) {
-      const line = _numOrNull(m[2]);
-      if (line != null) {
-        if ((homeNameLast && m[1].includes(homeNameLast)) || (homeAbbr && m[1].includes(homeAbbr))) {
-          spreadHome = line;
-          spreadAway = -line;
-        } else if ((awayNameLast && m[1].includes(awayNameLast)) || (awayAbbr && m[1].includes(awayAbbr))) {
-          spreadAway = line;
-          spreadHome = -line;
-        }
-      }
-    }
-  }
-
-  return {
-    spread: (spreadHome != null || spreadAway != null) ? {
-      home: spreadHome != null ? { point: spreadHome, price: homeSpreadPrice ?? null } : null,
-      away: spreadAway != null ? { point: spreadAway, price: awaySpreadPrice ?? null } : null,
-    } : null,
-    total: totalPoint != null ? {
-      over: { point: totalPoint, price: overPrice ?? null },
-      under: { point: totalPoint, price: underPrice ?? null },
-    } : null,
-    moneyline: (homeMoney != null || awayMoney != null) ? {
-      home: homeMoney != null ? { price: homeMoney } : null,
-      away: awayMoney != null ? { price: awayMoney } : null,
-    } : null,
-    source: "espn",
-  };
-}
 export async function getESPNGames(sportKey, date = null) {
   const s  = CONFIG.sports[sportKey];
   if (!s) return [];
@@ -120,9 +104,34 @@ export async function getESPNGames(sportKey, date = null) {
       );
       if (sched?.events?.length) data = sched;
     }
+  } else if (sportKey === "mlb" && date) {
+    data = await fetchJSON(CONFIG.publicApis?.mlbSchedule?.(date));
+    if (!data?.dates?.length) {
+      const url = CONFIG.espn.scoreboard(s.espnSport, s.espnLeague, date);
+      data = await fetchJSON(url);
+    }
   } else {
     const url = CONFIG.espn.scoreboard(s.espnSport, s.espnLeague, date);
     data = await fetchJSON(url);
+  }
+
+  // MLB public schedule uses a different shape than ESPN; normalize it first.
+  if (sportKey === "mlb" && Array.isArray(data?.dates)) {
+    data = { events: data.dates.flatMap(d => (d.games || []).map(g => ({
+      id: String(g.gamePk),
+      date: g.gameDate,
+      name: `${g?.teams?.away?.team?.name || 'Away'} @ ${g?.teams?.home?.team?.name || 'Home'}`,
+      shortName: `${g?.teams?.away?.team?.abbreviation || 'AWY'} @ ${g?.teams?.home?.team?.abbreviation || 'HME'}`,
+      status: { name: g?.status?.detailedState || 'scheduled', completed: g?.status?.abstractGameState === 'Final', state: g?.status?.abstractGameState === 'Live' ? 'in' : 'pre' },
+      competitions: [{
+        venue: { fullName: g?.venue?.name },
+        broadcasts: g?.broadcasts?.map(b => ({ names: [b?.name || b?.type].filter(Boolean) })) || [],
+        competitors: [
+          { homeAway: 'away', id: g?.teams?.away?.team?.id, team: { displayName: g?.teams?.away?.team?.name, abbreviation: g?.teams?.away?.team?.abbreviation, logo: g?.teams?.away?.team?.id ? `https://www.mlbstatic.com/team-logos/team-primary-on-light/${g.teams.away.team.id}.svg` : null }, score: g?.teams?.away?.score, records: g?.teams?.away?.leagueRecord ? [{ summary: `${g.teams.away.leagueRecord.wins}-${g.teams.away.leagueRecord.losses}` }] : [] },
+          { homeAway: 'home', id: g?.teams?.home?.team?.id, team: { displayName: g?.teams?.home?.team?.name, abbreviation: g?.teams?.home?.team?.abbreviation, logo: g?.teams?.home?.team?.id ? `https://www.mlbstatic.com/team-logos/team-primary-on-light/${g.teams.home.team.id}.svg` : null }, score: g?.teams?.home?.score, records: g?.teams?.home?.leagueRecord ? [{ summary: `${g.teams.home.leagueRecord.wins}-${g.teams.home.leagueRecord.losses}` }] : [] }
+        ]
+      }]
+    })))}
   }
 
   if (!data?.events) return [];
@@ -203,7 +212,6 @@ export async function getESPNGames(sportKey, date = null) {
           id: away?.id, name: away?.team?.displayName, abbr: away?.team?.abbreviation,
           logo: away?.team?.logo, score: away?.score, record: away?.records?.[0]?.summary
         },
-        odds: parseESPNOdds(comp, home?.team?.displayName, away?.team?.displayName),
         venue:     comp?.venue?.fullName,
         broadcast: comp?.broadcasts?.[0]?.names?.join(", "),
       });
