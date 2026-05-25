@@ -229,12 +229,12 @@ ${oddsLine}${formLine}${propsLine}`;
 5. Include every B+ angle. Minimum 3 picks per game; target 5–7 including props when available.
 6. Grade hierarchy (strictly follow): S=conf≥8.5,edge≥7% | A=conf≥7,edge≥5% | B=conf≥5.5,edge≥3%
 7. bestBet MUST be your single highest-graded pick (S first, then A). If best grade is B, set bestBet=null and noValue=true.
-8. Reasoning: ≤10 words each — be sharp, not verbose.${hasProps ? "\n9. Props: rate every PROPS line listed — include all B+ prop picks." : ""}${isMMA ? "\n9. MMA: also grade method (KO/Sub/Dec) and round props." : ""}
+8. Reasoning: 1 specific sentence referencing a concrete data point (mention actual record, exact odds line, or head-to-head context). No vague phrases like 'better record' or 'slight edge'.${hasProps ? "\n9. Props: rate every PROPS line listed — include all B+ prop picks." : ""}${isMMA ? "\n9. MMA: also grade method (KO/Sub/Dec) and round props." : ""}
 
 ${gameBlocks}
 
 Return ONLY a valid JSON array — no markdown, no preamble, no trailing text:
-[{"gameId":"ID","summary":"2 sentences using provided form/records only","picks":[{"id":"g0p1","type":"spread|moneyline|total","selection":"Full Team Name ±X.X or Over/Under X.X","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"≤10 words"}],"bestBet":{"id":"g0p1","type":"...","selection":"Full Team Name ±X.X — exact bet","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"≤10 words"},"lean":"home|away|over|under|none","confidence":7.5,"noValue":false,"props":[{"id":"pr1","type":"prop","player":"Full Name","team":"ABR","market":"player_points","marketLabel":"Points","selection":"Full Name (ABR) Over 24.5 Points","odds":"-115","point":24.5,"direction":"over","confidence":7.0,"edge":5.0,"grade":"A","reasoning":"≤10 words"}]}]`;
+[{"gameId":"ID","summary":"2 sentences — cite EXACT records (e.g. 34-16 vs 23-30) and specific odds; no generic phrases","picks":[{"id":"g0p1","type":"spread|moneyline|total","selection":"Full Team Name ±X.X or Over/Under X.X","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"1 specific sentence with data reference"}],"bestBet":{"id":"g0p1","type":"...","selection":"Full Team Name ±X.X — exact bet","odds":"+110","confidence":8.0,"edge":6.0,"grade":"A","reasoning":"1 specific sentence with data reference"},"lean":"home|away|over|under|none","confidence":7.5,"noValue":false,"props":[{"id":"pr1","type":"prop","player":"Full Name","team":"ABR","market":"player_points","marketLabel":"Points","selection":"Full Name (ABR) Over 24.5 Points","odds":"-115","point":24.5,"direction":"over","confidence":7.0,"edge":5.0,"grade":"A","reasoning":"1 specific sentence with data reference"}]}]`;
 }
 
 // ─── Single combined export (replaces separate analyzeBatchGames + analyzeBatchProps) ──
@@ -260,6 +260,17 @@ export async function analyzeCombinedBatch(gamesWithContext) {
 
   // Grade sort order (lower number = higher priority)
   const GRADE = { S:0, A:1, B:2, C:3 };
+
+  // Deduplicate picks: same selection + same odds = exact duplicate (prop in both picks[] and props[])
+  function dedupe(picks) {
+    const seen = new Set();
+    return picks.filter(p => {
+      const key = `${(p.selection||"").toLowerCase().trim()}|${p.odds}|${p.type}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
 
   // Fix spread/total selections that are missing the point value
   function fixSelection(pick, gc) {
@@ -297,12 +308,12 @@ export async function analyzeCombinedBatch(gamesWithContext) {
     const gamePicks = (result.picks || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
     const propPicks = (result.props || []).filter(p => (p.confidence ?? 0) >= 5.0 && (p.edge ?? 0) >= 2.5);
 
-    // Merge and sort S → A → B → C (then by confidence within same grade)
-    const allSorted = [...gamePicks, ...propPicks].sort(
+    // Merge, deduplicate, then sort S → A → B → C (then by confidence within same grade)
+    const allSorted = dedupe([...gamePicks, ...propPicks]).sort(
       (a, b) => (GRADE[a.grade] ?? 9) - (GRADE[b.grade] ?? 9) || (b.confidence ?? 0) - (a.confidence ?? 0)
     );
 
-    result.picks = allSorted.slice(0, 12); // store top 12 across game + prop picks
+    result.picks = allSorted.slice(0, 12); // top 12 deduplicated picks across game + props
     result.props = propPicks;              // keep props separately for compatibility
 
     // Force bestBet = highest-graded pick (must be S or A — never B)

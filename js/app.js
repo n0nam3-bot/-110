@@ -297,7 +297,7 @@ function _renderJumpNav() {
 //     – Ollama users get 0s cooldown (local, no limits)
 //  6. Each batch result live-updates the relevant game cards in place
 //
-const BATCH_SIZE    = 6;   // 6×650≈3900 tokens — better per-game coverage vs 8-game batches
+const BATCH_SIZE    = 3;   // 3 games per call = LLM reasons specifically about each game vs templating
 const COOLDOWN_SECS = 25;  // seconds between batches for cloud providers
 
 async function runAnalysis() {
