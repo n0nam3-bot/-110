@@ -33,6 +33,73 @@ function extractMMAPromotion(name) {
 }
 
 // ─── ESPN ────────────────────────────────────────────────────────────────────
+
+function _numOrNull(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseESPNOdds(comp, homeName = "", awayName = "") {
+  const source = comp?.odds?.[0] || comp?.odds?.at?.(-1) || comp?.lines?.[0] || null;
+  if (!source) return null;
+
+  const homeMoney = _numOrNull(source.homeTeamOdds?.moneyLine ?? source.homeTeamOdds?.moneyline ?? source.homeTeamOdds?.price);
+  const awayMoney = _numOrNull(source.awayTeamOdds?.moneyLine ?? source.awayTeamOdds?.moneyline ?? source.awayTeamOdds?.price);
+  const homeSpreadPoint = _numOrNull(source.homeTeamOdds?.pointSpread ?? source.homeTeamOdds?.spread ?? source.homeTeamOdds?.line ?? source.spread);
+  const awaySpreadPoint = _numOrNull(source.awayTeamOdds?.pointSpread ?? source.awayTeamOdds?.spread ?? source.awayTeamOdds?.line ?? (homeSpreadPoint != null ? -homeSpreadPoint : null));
+  const homeSpreadPrice = _numOrNull(source.homeTeamOdds?.price ?? source.homeTeamOdds?.odds ?? source.homeTeamOdds?.spreadOdds);
+  const awaySpreadPrice = _numOrNull(source.awayTeamOdds?.price ?? source.awayTeamOdds?.odds ?? source.awayTeamOdds?.spreadOdds);
+  const totalPoint = _numOrNull(source.overUnder ?? source.total ?? source.over_under ?? source.overUnderLine);
+  const overPrice = _numOrNull(source.overOdds ?? source.overPrice ?? source.overTeamOdds?.price ?? source.overTeamOdds?.moneyLine);
+  const underPrice = _numOrNull(source.underOdds ?? source.underPrice ?? source.underTeamOdds?.price ?? source.underTeamOdds?.moneyLine);
+
+  const hasAny = [homeMoney, awayMoney, homeSpreadPoint, awaySpreadPoint, totalPoint].some(v => v != null);
+  if (!hasAny) return null;
+
+  const homeAbbr = (homeName || "").toLowerCase();
+  const awayAbbr = (awayName || "").toLowerCase();
+  const details = String(source.details || source.text || "").toLowerCase();
+  const homeNameLast = homeAbbr.split(/\s+/).filter(Boolean).pop() || "";
+  const awayNameLast = awayAbbr.split(/\s+/).filter(Boolean).pop() || "";
+
+  let spreadHome = homeSpreadPoint;
+  let spreadAway = awaySpreadPoint;
+  if (spreadHome == null && spreadAway != null) spreadHome = -spreadAway;
+  if (spreadAway == null && spreadHome != null) spreadAway = -spreadHome;
+
+  // ESPN sometimes only exposes a short details string like "STL -1.5"
+  if (spreadHome == null && details) {
+    const m = details.match(/([a-z0-9 .&'\-]+)\s*([+-]\d+(?:\.\d+)?)$/i);
+    if (m) {
+      const line = _numOrNull(m[2]);
+      if (line != null) {
+        if ((homeNameLast && m[1].includes(homeNameLast)) || (homeAbbr && m[1].includes(homeAbbr))) {
+          spreadHome = line;
+          spreadAway = -line;
+        } else if ((awayNameLast && m[1].includes(awayNameLast)) || (awayAbbr && m[1].includes(awayAbbr))) {
+          spreadAway = line;
+          spreadHome = -line;
+        }
+      }
+    }
+  }
+
+  return {
+    spread: (spreadHome != null || spreadAway != null) ? {
+      home: spreadHome != null ? { point: spreadHome, price: homeSpreadPrice ?? null } : null,
+      away: spreadAway != null ? { point: spreadAway, price: awaySpreadPrice ?? null } : null,
+    } : null,
+    total: totalPoint != null ? {
+      over: { point: totalPoint, price: overPrice ?? null },
+      under: { point: totalPoint, price: underPrice ?? null },
+    } : null,
+    moneyline: (homeMoney != null || awayMoney != null) ? {
+      home: homeMoney != null ? { price: homeMoney } : null,
+      away: awayMoney != null ? { price: awayMoney } : null,
+    } : null,
+    source: "espn",
+  };
+}
 export async function getESPNGames(sportKey, date = null) {
   const s  = CONFIG.sports[sportKey];
   if (!s) return [];
@@ -136,6 +203,7 @@ export async function getESPNGames(sportKey, date = null) {
           id: away?.id, name: away?.team?.displayName, abbr: away?.team?.abbreviation,
           logo: away?.team?.logo, score: away?.score, record: away?.records?.[0]?.summary
         },
+        odds: parseESPNOdds(comp, home?.team?.displayName, away?.team?.displayName),
         venue:     comp?.venue?.fullName,
         broadcast: comp?.broadcasts?.[0]?.names?.join(", "),
       });

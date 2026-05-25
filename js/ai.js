@@ -195,14 +195,32 @@ function buildFreeGameAnalysis(game, context = {}) {
   const odds = game?.odds || null;
   const gameId = game?.id ?? `${game?.sport || 'game'}_${Date.now()}`;
   if (!odds?.moneyline && !odds?.spread && !odds?.total) {
+    const homeRec = parseRecordPct(game?.homeTeam?.record);
+    const awayRec = parseRecordPct(game?.awayTeam?.record);
+    const homeRecent = recentAvgScore(recentFormHome);
+    const awayRecent = recentAvgScore(recentFormAway);
+    const homeValue = (homeRec ?? 0.5) + (((homeRecent ?? 0) - (awayRecent ?? 0)) / 100);
+    const awayValue = (awayRec ?? 0.5) + (((awayRecent ?? 0) - (homeRecent ?? 0)) / 100);
+    const leanSide = homeValue === awayValue ? 'none' : (homeValue > awayValue ? 'home' : 'away');
+    const leanTeam = leanSide === 'home' ? game.homeTeam : game.awayTeam;
+    const leanConfidence = clamp(5.0 + Math.abs(homeValue - awayValue) * 10, 5.0, 6.8);
     return {
       gameId,
-      summary: 'No live odds available for this game.',
-      picks: [],
+      summary: 'No live odds available; using records and recent form for a lean only.',
+      picks: leanSide === 'none' ? [] : [{
+        id: pickId(gameId, 'lean'),
+        type: 'lean',
+        selection: `${leanTeam.name} lean (odds unavailable)`,
+        odds: 'N/A',
+        confidence: Number(leanConfidence.toFixed(1)),
+        edge: 0,
+        grade: 'C',
+        reasoning: `${leanTeam.name} has the better record/form profile in the available ESPN data, but there are no live market lines to price a wager.`
+      }],
       props: [],
       bestBet: null,
-      lean: 'none',
-      confidence: 0,
+      lean: leanSide,
+      confidence: Number(leanConfidence.toFixed(1)),
       noValue: true,
       provider: 'free',
       analyzedAt: Date.now()
