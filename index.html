@@ -13,7 +13,7 @@
   <meta property="og:description" content="AI-powered best bets, props, and analysis. Free forever.">
   <meta property="og:type" content="website">
   <!-- System font stack used — no external font dependency -->
-  <link rel="stylesheet" href="css/style.css?v=1.1.7">
+  <link rel="stylesheet" href="css/style.css?v=1.2.0">
 </head>
 <body>
 
@@ -295,7 +295,7 @@
           AI: Gemini 2.0 Flash Lite · Groq Llama 3.3 · OpenRouter · Ollama (local)<br><br>
           Picks are for informational purposes only. Bet responsibly.
         </p>
-        <div style="margin-top:16px;font-size:.72rem;color:var(--text3)">v1.1.7 · github.com/n0nam3-bot/-110</div>
+        <div style="margin-top:16px;font-size:.72rem;color:var(--text3)">v1.2.0 · github.com/n0nam3-bot/-110</div>
       </div>
     </div>
     <div class="modal-footer">
@@ -344,6 +344,7 @@
     </div>
     <div class="modal-footer" style="justify-content:space-between">
       <div style="display:flex;gap:8px">
+        <div id="profile-quota" class="quota-panel" style="margin:16px 0 12px"><!-- API quota populated by app.js --></div>
         <button class="nav-btn" id="btn-logout">Sign Out</button>
         <button class="nav-btn" id="btn-profile-reset-password" title="Send password reset email">🔑 Reset Password</button>
       </div>
@@ -353,8 +354,8 @@
 </div>
 
 <!-- ─── Scripts ─── -->
-<script src="js/config.js?v=1.1.7"></script>
-<script type="module" src="js/app.js?v=1.1.7"></script>
+<script src="js/config.js?v=1.2.0"></script>
+<script type="module" src="js/app.js?v=1.2.0"></script>
 <script>
   // Set today's date
   document.getElementById("today-date").textContent =
