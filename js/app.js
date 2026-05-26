@@ -4,8 +4,7 @@ import { initFirebase, onUserChange, ensureUserDoc, getCurrentUser,
          savePick, unsavePick, sendPasswordReset } from "./firebase.js";
 import { loadGamesForSport, getPicksForSport } from "./picks.js";
 import { clearDataCache } from "./data.js";
-import { getAPIUsage, lastProvider } from "./ai.js";
-import { hasKeys, lastProvider } from "./ai.js";
+import { hasKeys, getAPIUsage, lastProvider } from "./ai.js";
 import { renderGameCard, renderBestBetsSidebar, renderSavedSidebar,
          renderSummaryBar, attachSaveHandlers, attachToggleHandlers,
          renderSkeletons, toast, openModal, closeModal, closeAllModals } from "./ui.js";
