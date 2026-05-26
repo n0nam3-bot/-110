@@ -1187,3 +1187,23 @@ button { cursor: pointer; font-family: inherit; border: none; }
 .master-progress.cooldown .mp-label {
   color: var(--text, #f0f0f0);
 }
+
+/* ── API Quota Panel (Profile modal) ─────────────────────────────────────── */
+.quota-panel { border-top: 1px solid var(--border,#222); padding-top: 14px; }
+.quota-title {
+  font-size: .7rem; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--text2,#888); margin-bottom: 10px;
+}
+.quota-row {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 10px; margin-bottom: 9px; font-size: .78rem; color: var(--text,#f0f0f0);
+}
+.quota-row.unset { color: var(--text3,#555); }
+.quota-right  { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 0; }
+.quota-bar    { width: 100px; height: 4px; background: rgba(255,255,255,.08); border-radius: 2px; overflow: hidden; }
+.quota-fill   { height: 100%; border-radius: 2px; transition: width .4s; }
+.quota-nums   { font-size: .68rem; color: var(--text2,#888); }
+.quota-hint   { font-size: .66rem; color: var(--text3,#555); }
+.quota-tag    { font-size: .66rem; padding: 2px 7px; border-radius: 4px; }
+.quota-tag.ok      { background: rgba(181,242,61,.12); color: var(--accent,#b5f23d); }
+.quota-tag.not-set { background: rgba(255,255,255,.05); color: var(--text3,#555); }
