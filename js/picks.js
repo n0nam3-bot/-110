@@ -1,6 +1,6 @@
 import { analyzeGame, analyzeProps, analyzeCombinedBatch } from "./ai.js";
 import { getESPNGames, getTeamStats, getTeamSchedule, getSleeperInjuries,
-         getOdds, getPlayerProps, getNBAPlayerStats, mergeOddsIntoGames } from "./data.js";
+         getOdds, getPlayerProps, getNBAPlayerStats, mergeOddsIntoGames, getTeamInjuries } from "./data.js";
 import { getCachedPick, setCachedPick } from "./firebase.js";
 
 function getUserKey(name) { return localStorage.getItem(KEYS[name]) || ""; }
@@ -53,14 +53,16 @@ async function _batchAnalyze(games, onProgress) {
   const gamesWithContext = await Promise.all(games.map(async game => {
     const hasTeams = !!(game.homeTeam?.id && game.awayTeam?.id);
 
-    const [injuryData, homeSchedule, awaySchedule, homeStats, awayStats, rawProps] = await Promise.all([
+    const [injuryData, homeSchedule, awaySchedule, homeStats, awayStats, rawProps, homeInjuries, awayInjuries] = await Promise.all([
       game.sport === "nfl" ? getSleeperInjuries().catch(() => ({})) : Promise.resolve({}),
       hasTeams ? getTeamSchedule(game.sport, game.homeTeam.id).catch(() => []) : Promise.resolve([]),
       hasTeams ? getTeamSchedule(game.sport, game.awayTeam.id).catch(() => []) : Promise.resolve([]),
       hasTeams ? getTeamStats(game.sport, game.homeTeam.id).catch(() => [])    : Promise.resolve([]),
       hasTeams ? getTeamStats(game.sport, game.awayTeam.id).catch(() => [])    : Promise.resolve([]),
-      // Fetch props alongside everything else — folded into the single LLM call
       (oddsKey && game.oddsId) ? getPlayerProps(game.sport, game.oddsId, oddsKey).catch(() => []) : Promise.resolve([]),
+      // ESPN injuries — free, works for all sports, key signal for picks
+      hasTeams ? getTeamInjuries(game.sport, game.homeTeam.id).catch(() => []) : Promise.resolve([]),
+      hasTeams ? getTeamInjuries(game.sport, game.awayTeam.id).catch(() => []) : Promise.resolve([]),
     ]);
 
     // NBA player stats for props context
@@ -76,8 +78,10 @@ async function _batchAnalyze(games, onProgress) {
       teamStatsHome: homeStats, teamStatsAway: awayStats,
       injuryData,
       recentFormHome: homeSchedule, recentFormAway: awaySchedule,
-      props: rawProps,       // passed inline to combined prompt
+      props: rawProps,
       playerStats,
+      homeInjuries,   // ESPN injury report for home team
+      awayInjuries,   // ESPN injury report for away team
     };
   }));
 

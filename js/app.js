@@ -2,8 +2,9 @@ import { initFirebase, onUserChange, ensureUserDoc, getCurrentUser,
          loginGoogle, loginEmail, registerEmail, logout,
          getUserDoc, saveUserKeys, getUserKeys, syncUserKeysToLocalStorage,
          savePick, unsavePick, sendPasswordReset } from "./firebase.js";
-import { loadGamesForSport, getPicksForSport, getPicksForBatch } from "./picks.js";
+import { loadGamesForSport, getPicksForSport } from "./picks.js";
 import { clearDataCache } from "./data.js";
+import { getAPIUsage, lastProvider } from "./ai.js";
 import { hasKeys, lastProvider } from "./ai.js";
 import { renderGameCard, renderBestBetsSidebar, renderSavedSidebar,
          renderSummaryBar, attachSaveHandlers, attachToggleHandlers,
@@ -288,18 +289,10 @@ function _renderJumpNav() {
 }
 
 // ─── Main run function ───────────────────────────────────────────────────────
-//
-// Architecture:
-//  1. Fetch ALL sports' games in parallel (fast ESPN + odds calls, no LLM)
-//  2. Render EVERY game card immediately with live odds (users see everything)
-//  3. Build a single global queue of all games across all sports
-//  4. Process the queue in batches of BATCH_SIZE through the LLM
-//  5. Between batches: cooldown timer so free-tier rate limits reset
-//     – Ollama users get 0s cooldown (local, no limits)
-//  6. Each batch result live-updates the relevant game cards in place
-//
-const BATCH_SIZE    = 3;   // 3 games per call = LLM reasons specifically about each game vs templating
-const COOLDOWN_SECS = 25;  // seconds between batches for cloud providers
+// Architecture: fetch ALL sports' games in parallel (fast), then analyze
+// each sport sequentially with ONE LLM call per sport.
+// Large sports (>7 games) get two calls automatically.
+// No fixed cooldowns — adaptive retry handles rate limits.
 
 async function runAnalysis() {
   if (state.running) return;
@@ -315,44 +308,36 @@ async function runAnalysis() {
   const btn = document.getElementById("btn-run");
   if (btn) { btn.textContent = "⏳ Analyzing…"; btn.disabled = true; }
 
-  // Reset everything
+  // Wipe all caches so we always fetch fresh on explicit run
+  sports.forEach(sk => { delete _sportCache[sk]; });
+  clearDataCache();
+
   document.getElementById("results-area").innerHTML = "";
   document.getElementById("sport-jump-nav")?.remove();
-  state.games    = {};
-  state.pickData = {};
+  state.games = {}; state.pickData = {};
   ["stat-games","stat-bestbets","stat-picks","stat-sgrades"].forEach(id => {
     const el = document.getElementById(id); if (el) el.textContent = "–";
   });
 
-  // ── Phase 1: Always fetch FRESH data — never use cache during an explicit run ──
-  // (Cache is only used on initial page load via _showCachedResults)
-  // Wipe ALL caches so ESPN, odds, and picks are all re-fetched from network
-  sports.forEach(sk => { delete _sportCache[sk]; });
-  clearDataCache(); // clears ESPN + odds in-memory cache in data.js
-
+  // ── Phase 1: Fetch ALL sports' games in parallel (ESPN + odds, no LLM) ──
   _showMasterProgress("Fetching schedules & odds…", 0.02);
-
   await Promise.all(sports.map(async sk => {
     try {
       const games = await loadGamesForSport(sk, state.activeDate);
       state.games[sk]    = games;
       state.pickData[sk] = [];
-      // Show ALL game cards immediately with live odds (analysis spinner while queued)
       _renderSportSection(sk, games, [], false);
     } catch (e) {
-      console.warn(`${sk} fetch failed:`, e.message);
-      state.games[sk]    = [];
-      state.pickData[sk] = [];
+      console.warn(`${sk} fetch:`, e.message);
+      state.games[sk] = []; state.pickData[sk] = [];
     }
   }));
 
   document.getElementById("results-area")
-    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    ?.scrollIntoView({ behavior:"smooth", block:"start" });
 
-  // ── Phase 2: Queue ALL sports that have games ─────────────────────────────
-  const sportsNeedingAnalysis = sports.filter(sk => (state.games[sk] || []).length > 0);
-
-  if (!sportsNeedingAnalysis.length) {
+  const sportsWithGames = sports.filter(sk => (state.games[sk] || []).length > 0);
+  if (!sportsWithGames.length) {
     _showMasterProgress("No games found for the selected date.", 1.0);
     setTimeout(() => _clearMasterProgress(), 3000);
     if (btn) { btn.textContent = "↻ Refresh Analysis"; btn.disabled = false; }
@@ -360,82 +345,54 @@ async function runAnalysis() {
     return;
   }
 
-  const gameQueue = sportsNeedingAnalysis.flatMap(sk =>
-    (state.games[sk] || []).map(g => ({ ...g, _sk: sk }))
-  );
-
-  const totalGames   = gameQueue.length;
-  const totalBatches = Math.ceil(totalGames / BATCH_SIZE);
-
-  // ── Phase 3: Process batches with countdown between them ─────────────────
-  for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
-    const start = batchIdx * BATCH_SIZE;
-    const batch = gameQueue.slice(start, start + BATCH_SIZE);
-    const end   = start + batch.length;
-
-    // Cooldown before batch 2+ (skip for Ollama — no rate limits)
-    if (batchIdx > 0 && lastProvider !== "ollama") {
-      await _countdown(COOLDOWN_SECS,
-        `Rate-limit cooldown (batch ${batchIdx + 1}/${totalBatches})`);
-    }
+  // ── Phase 2: Analyze each sport sequentially (1 LLM call per sport) ──────
+  const totalSports = sportsWithGames.length;
+  for (let si = 0; si < sportsWithGames.length; si++) {
+    const sk = sportsWithGames[si];
+    const s  = CONFIG.sports[sk];
+    const games = state.games[sk] || [];
 
     _showMasterProgress(
-      `Batch ${batchIdx + 1} of ${totalBatches} — analyzing games ${start + 1}–${end} of ${totalGames}`,
-      (start / totalGames) * 0.95 + 0.03,
-      "analysis"
+      `${s.emoji} ${s.label} — fetching context…`,
+      (si / totalSports) * 0.95 + 0.03, "analysis"
     );
 
     try {
-      const batchPicks = await getPicksForBatch(batch, (msg, pct) => {
-        const overall = ((start + pct * batch.length) / totalGames) * 0.95 + 0.03;
+      const pickData = await _analyzeSport(sk, games, (msg, pct) => {
         _showMasterProgress(
-          `Batch ${batchIdx + 1}/${totalBatches}: ${msg}`,
-          overall, "analysis"
+          `${s.emoji} ${s.label} — ${msg}`,
+          ((si + pct) / totalSports) * 0.95 + 0.03, "analysis"
         );
       });
 
-      // Distribute results back to their sport buckets
-      for (const pd of batchPicks) {
-        const qg = gameQueue.find(g => String(g.id) === String(pd.gameId));
-        const sk = qg?._sk;
-        if (sk) {
-          state.pickData[sk] = [...(state.pickData[sk] || []), pd];
-        }
-      }
+      state.pickData[sk] = pickData;
+      _sportCache[sk]    = { games, pickData, loadedAt: Date.now() };
+      _lsSet(sk, state.activeDate, games, pickData);
 
-      // Live-update every affected sport section
-      const affectedSports = [...new Set(batch.map(g => g._sk))];
-      for (const sk of affectedSports) {
-        _refreshSportCards(sk, gameQueue);
-        attachSaveHandlers(state.pickData[sk] || [], state.savedIds, onSaveChange);
-      }
-
-      // Update aggregate sidebar after each batch
+      // Re-render sport section with full picks
+      _renderSportSection(sk, games, pickData, false);
+      attachSaveHandlers(pickData, state.savedIds, onSaveChange);
       _updateAggregateSidebar();
 
     } catch (e) {
-      console.warn(`Batch ${batchIdx + 1} failed:`, e.message);
-      // Mark affected games as errored
-      const affectedSports = [...new Set(batch.map(g => g._sk))];
-      for (const sk of affectedSports) {
-        const errPicks = batch
-          .filter(g => g._sk === sk)
-          .map(g => ({ gameId: g.id, game: g, allPicks: [], bestBet: null, error: e.message }));
-        state.pickData[sk] = [...(state.pickData[sk] || []), ...errPicks];
-        _refreshSportCards(sk, gameQueue);
+      console.error(`${sk} analysis:`, e.message);
+      // Show error on the sport section cards
+      const gamesEl = document.getElementById(`sport-games-${sk}`);
+      if (gamesEl) {
+        const errMsg = e.message.includes("ALL_PROVIDERS_FAILED")
+          ? "All AI providers rate-limited — try again in 1-2 minutes, or add more provider keys."
+          : e.message.includes("NO_KEYS")
+          ? "No AI keys configured — open Settings to add free keys."
+          : `Analysis failed: ${e.message}`;
+        gamesEl.querySelectorAll(".game-card").forEach(card => {
+          const ps = card.querySelector(".pick-section");
+          if (ps) ps.innerHTML = `<div class="no-value-row">⚠ ${errMsg}</div>`;
+        });
       }
     }
   }
 
-  // ── Phase 4: Persist everything to cache ─────────────────────────────────
-  for (const sk of sportsNeedingAnalysis) {
-    const games    = state.games[sk]    || [];
-    const pickData = state.pickData[sk] || [];
-    _sportCache[sk] = { games, pickData, loadedAt: Date.now() };
-    _lsSet(sk, state.activeDate, games, pickData);
-  }
-
-  _showMasterProgress("✓ All games analyzed!", 1.0);
+  _showMasterProgress("✓ All sports analyzed!", 1.0);
   setTimeout(() => _clearMasterProgress(), 3000);
   _updateAggregateSidebar();
 
@@ -443,27 +400,29 @@ async function runAnalysis() {
   state.running = false;
 }
 
-// Refresh individual game cards inside a sport section after new picks arrive.
-// Only touches cards whose data has changed — no full section re-render.
-function _refreshSportCards(sportKey, fullQueue) {
-  const gamesEl = document.getElementById(`sport-games-${sportKey}`);
-  if (!gamesEl) return;
+// Analyze ONE sport — splits into 2 calls if > MAX_PER_CALL games
+const MAX_PER_CALL = 7; // 7 games × ~600 tokens = ~4200 tokens output, fits all providers
 
-  const games    = state.games[sportKey]    || [];
-  const pickData = state.pickData[sportKey] || [];
+async function _analyzeSport(sportKey, games, onProgress) {
+  if (games.length <= MAX_PER_CALL) {
+    return getPicksForSport(games, onProgress);
+  }
+  // Large slate: two sequential calls
+  const first  = games.slice(0, MAX_PER_CALL);
+  const rest   = games.slice(MAX_PER_CALL);
+  const half   = first.length / games.length;
 
-  // Which game IDs are queued for analysis (but not yet done)?
-  const queuedIds = new Set(fullQueue.filter(g => g._sk === sportKey).map(g => String(g.id)));
+  onProgress(`Analyzing games 1–${first.length} of ${games.length}…`, 0.05);
+  const picks1 = await getPicksForSport(first, (msg, pct) => {
+    onProgress(msg, 0.05 + pct * (half * 0.9));
+  });
 
-  gamesEl.innerHTML = games.map(g => {
-    const pd = pickData.find(pd => String(pd.gameId) === String(g.id)) || null;
-    // Still queued for analysis → show spinner (null)
-    // Not in queue and no picks → odds only
-    const fallback = queuedIds.has(String(g.id)) ? null : { allPicks:[], bestBet:null, noAnalysis:true };
-    return renderGameCard(g, pd || fallback, state.savedIds);
-  }).join("");
+  onProgress(`Analyzing games ${first.length+1}–${games.length}…`, half * 0.95);
+  const picks2 = await getPicksForSport(rest, (msg, pct) => {
+    onProgress(msg, half * 0.95 + pct * ((1 - half) * 0.9));
+  });
 
-  attachToggleHandlers();
+  return [...picks1, ...picks2];
 }
 
 // ─── 30-min auto-refresh ──────────────────────────────────────────────────────
@@ -558,6 +517,31 @@ function openProfileModal() {
   document.getElementById("profile-losses").textContent = rec.losses;
   document.getElementById("profile-pushes").textContent = rec.pushes;
   const re = document.getElementById("reset-email"); if (re) re.value = user.email || "";
+
+  // Render API quota panel
+  const quotaEl = document.getElementById("profile-quota");
+  if (quotaEl) {
+    const usage    = getAPIUsage();
+    const oddsRem  = localStorage.getItem("_110_odds_remaining");
+    const oddsUsed = localStorage.getItem("_110_odds_used");
+    const groqRem  = localStorage.getItem("_110_groq_tokens_rem");
+    const groqReq  = localStorage.getItem("_110_groq_req_rem");
+
+    quotaEl.innerHTML = `
+      <div class="quota-title">API Quota</div>
+      ${usage.map(u => {
+        if (!u.configured) return `<div class="quota-row unset"><span>${u.label}</span><span class="quota-tag not-set">not configured</span></div>`;
+        const dailyBar = u.dailyLimit
+          ? `<div class="quota-bar"><div class="quota-fill" style="width:${Math.min(100,u.dailyPct||0)}%;background:${(u.dailyPct||0)>85?"#f5a623":(u.dailyPct||0)>95?"#ff6b6b":"var(--accent)"}"></div></div>
+             <span class="quota-nums">${u.dailyUsed}/${u.dailyLimit} today</span>`
+          : `<span class="quota-tag ok">Local — unlimited</span>`;
+        const extra = u.id === "groq" && groqRem ? `<span class="quota-hint">${Number(groqRem).toLocaleString()} tokens/min left</span>` : "";
+        return `<div class="quota-row"><span>${u.label}</span><div class="quota-right">${dailyBar}${extra}</div></div>`;
+      }).join("")}
+      ${oddsRem != null ? `<div class="quota-row"><span>Odds API</span><div class="quota-right"><span class="quota-nums">${oddsUsed||"?"} used · ${oddsRem} remaining / 500</span></div></div>` : ""}
+    `;
+  }
+
   openModal("modal-profile");
 }
 

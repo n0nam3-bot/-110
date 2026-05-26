@@ -267,7 +267,17 @@ export async function getOdds(sportKey, apiKey) {
   if (cached) return cached;
   const s   = CONFIG.sports[sportKey];
   const url = `${CONFIG.oddsApi.base}/sports/${s.oddsKey}/odds?apiKey=${apiKey}&regions=${CONFIG.oddsApi.regions}&markets=${CONFIG.oddsApi.markets}&oddsFormat=${CONFIG.oddsApi.format}`;
-  const data = await fetchJSON(url);
+  let data = null;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(r.status);
+    // Capture remaining quota from response headers
+    const rem  = r.headers.get("x-requests-remaining");
+    const used = r.headers.get("x-requests-used");
+    if (rem  != null) localStorage.setItem("_110_odds_remaining", rem);
+    if (used != null) localStorage.setItem("_110_odds_used", used);
+    data = await r.json();
+  } catch (e) { console.warn("Odds API:", e.message); return []; }
   if (!data || !Array.isArray(data)) return [];
   const result = data
     .filter(g => new Date(g.commence_time) > new Date())
@@ -301,6 +311,26 @@ export async function getPlayerProps(sportKey, eventId, apiKey) {
   }
   memSet(ck, props, CONFIG.cache.odds);
   return props;
+}
+
+
+// ─── ESPN Team Injuries (free, no key needed) ─────────────────────────────────
+export async function getTeamInjuries(sportKey, teamId) {
+  if (!teamId || sportKey === "mma") return [];
+  const s  = CONFIG.sports[sportKey];
+  const ck = `inj_${sportKey}_${teamId}`;
+  const cached = memGet(ck);
+  if (cached) return cached;
+  const data = await fetchJSON(
+    `https://site.api.espn.com/apis/site/v2/sports/${s.espnSport}/${s.espnLeague}/teams/${teamId}/injuries`
+  );
+  const injuries = (data?.injuries || []).slice(0, 5).map(inj => ({
+    player: inj.athlete?.displayName || "Unknown",
+    position: inj.athlete?.position?.abbreviation || "",
+    status: inj.status || "Injured",
+  }));
+  memSet(ck, injuries, 20 * 60 * 1000); // 20-min cache
+  return injuries;
 }
 
 // ─── Merge odds into games ────────────────────────────────────────────────────
